@@ -191,6 +191,9 @@
     return task;
   }
 
+  const NEXT_STATUS = { todo: 'doing', doing: 'done', done: 'todo' };
+  const STATUS_VERB = { todo: 'Not started', doing: 'In progress', done: 'Done' };
+
   function setStatus(task, status) {
     task.status = status;
     task.completedAt = status === 'done' ? Date.now() : null;
@@ -544,6 +547,7 @@
     const li = document.createElement('li');
     li.className = 'card';
     if (task.status === 'done') li.classList.add('is-done');
+    if (task.status === 'doing') li.classList.add('is-doing');
     if (compact) li.classList.add('compact');
     li.draggable = true;
     li.dataset.id = task.id;
@@ -554,11 +558,14 @@
 
     const box = document.createElement('button');
     box.className = 'check';
-    box.setAttribute('aria-label', task.status === 'done' ? 'Mark as not done' : 'Mark as done');
-    box.setAttribute('aria-pressed', String(task.status === 'done'));
+    box.dataset.status = task.status;
+    box.setAttribute('aria-label',
+      `${STATUS_VERB[task.status]} — click for ${STATUS_VERB[NEXT_STATUS[task.status]].toLowerCase()}`);
+    box.title = box.getAttribute('aria-label');
     box.addEventListener('click', (e) => {
       e.stopPropagation();
-      setStatus(task, task.status === 'done' ? 'todo' : 'done');
+      // Shift-click jumps straight to done, skipping in-progress.
+      setStatus(task, e.shiftKey && task.status !== 'done' ? 'done' : NEXT_STATUS[task.status]);
       render();
     });
     top.append(box);
@@ -633,7 +640,7 @@
       if (e.key === 'Enter') openModal(task.id);
       if (e.key === ' ') {
         e.preventDefault();
-        setStatus(task, task.status === 'done' ? 'todo' : 'done');
+        setStatus(task, NEXT_STATUS[task.status]);
         render();
       }
     });
@@ -657,8 +664,8 @@
       box.addEventListener('click', (e) => {
         e.stopPropagation();
         sub.done = !sub.done;
-        // All subtasks ticked promotes the parent out of To Do.
-        if (task.subtasks.every((s) => s.done) && task.status === 'todo') task.status = 'doing';
+        // Ticking any subtask means work has begun on the parent.
+        if (sub.done && task.status === 'todo') task.status = 'doing';
         save();
         render();
       });
@@ -678,6 +685,7 @@
     li.dataset.id = task.id;
     li.draggable = true;
     if (task.status === 'done') li.classList.add('is-done');
+    if (task.status === 'doing') li.classList.add('is-doing');
     li.dataset.section = task.section;
     li.append(Object.assign(document.createElement('span'), { textContent: task.title }));
     if (task.subtasks.length) {

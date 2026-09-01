@@ -170,18 +170,24 @@ textarea{resize:vertical}
 .card:hover{border-color:var(--line-strong);transform:translateY(-1px)}
 .card:focus-visible{outline:none;box-shadow:var(--ring)}
 .card.dragging{opacity:.4;transform:rotate(1.2deg)}
+.card.is-doing{border-left:2px solid var(--text);padding-left:8px}
 .card.is-done{opacity:.6}
 .card.is-done .title{text-decoration:line-through;text-decoration-color:var(--line-strong);color:var(--muted)}
 .card-top{display:flex;gap:8px;align-items:flex-start}
 .title{font-size:13px;font-weight:500;line-height:1.38;flex:1;min-width:0;word-break:break-word}
 
 .check{
-  width:15px;height:15px;flex:none;margin-top:2px;padding:0;border-radius:5px;
-  border:1.5px solid var(--line-strong);background:transparent;
+  position:relative;width:15px;height:15px;flex:none;margin-top:2px;padding:0;border-radius:5px;
+  border:1.5px solid var(--line-strong);background:transparent;overflow:hidden;
 }
 .check:hover{border-color:var(--text);background:transparent}
-.check[aria-pressed=true]{background:var(--accent);border-color:var(--accent);position:relative}
-.check[aria-pressed=true]::after{
+/* In progress: half filled, so a started task reads differently at a glance. */
+.check[data-status=doing]{border-color:var(--text)}
+.check[data-status=doing]::before{
+  content:"";position:absolute;inset:0;width:50%;background:var(--text);
+}
+.check[data-status=done],.check[aria-pressed=true]{background:var(--accent);border-color:var(--accent)}
+.check[data-status=done]::after,.check[aria-pressed=true]::after{
   content:"";position:absolute;left:4px;top:1px;width:4px;height:8px;
   border:solid var(--accent-fg);border-width:0 1.6px 1.6px 0;transform:rotate(42deg);
 }
@@ -307,6 +313,7 @@ textarea{resize:vertical}
 .cell.outside .mini-card{background:transparent}
 .mini-card:hover{border-color:var(--line-strong)}
 .mini-card[data-section=personal]{border-style:dashed}
+.mini-card.is-doing{border-left:2px solid var(--text)}
 .mini-card.is-done{opacity:.5;text-decoration:line-through}
 .mini-card.dragging{opacity:.4}
 .more{list-style:none;font-size:10.5px;color:var(--faint);cursor:pointer;padding:1px 6px}
