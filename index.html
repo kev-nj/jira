@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jira Board</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div>
+      <h1 id="projectName">My Project</h1>
+      <div class="crumb"><span id="todayLabel"></span> · <span id="clock"></span> · <span id="dueSummary"></span></div>
+    </div>
+  </div>
+  <div class="controls">
+    <input id="search" type="search" placeholder="Search issues…" autocomplete="off">
+    <select id="filterAssignee"><option value="">All assignees</option></select>
+    <select id="filterType">
+      <option value="">All types</option>
+      <option value="story">Story</option>
+      <option value="task">Task</option>
+      <option value="bug">Bug</option>
+      <option value="epic">Epic</option>
+    </select>
+    <button id="todayBtn" class="ghost wide" aria-pressed="false">Due today</button>
+    <select id="filterPriority">
+      <option value="">All priorities</option>
+      <option value="highest">Highest</option>
+      <option value="high">High</option>
+      <option value="medium">Medium</option>
+      <option value="low">Low</option>
+      <option value="lowest">Lowest</option>
+    </select>
+    <button id="newIssueBtn" class="primary">+ Create</button>
+    <div class="menu">
+      <button id="menuBtn" class="ghost" aria-haspopup="true">⋯</button>
+      <div id="menuList" class="menu-list" hidden>
+        <button id="exportBtn">Export JSON</button>
+        <button id="importBtn">Import JSON</button>
+        <button id="seedBtn">Load sample data</button>
+        <button id="resetBtn" class="danger">Clear board</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main id="board" class="board"></main>
+
+<input type="file" id="importFile" accept="application/json" hidden>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <h2 id="modalTitle">Create issue</h2>
+      <button id="modalClose" class="ghost">✕</button>
+    </div>
+    <form id="issueForm">
+      <label>Summary
+        <input name="title" required maxlength="200" placeholder="What needs to be done?">
+      </label>
+      <label>Description
+        <textarea name="description" rows="4" placeholder="Add more detail…"></textarea>
+      </label>
+      <div class="row">
+        <label>Type
+          <select name="type">
+            <option value="story">Story</option>
+            <option value="task">Task</option>
+            <option value="bug">Bug</option>
+            <option value="epic">Epic</option>
+          </select>
+        </label>
+        <label>Priority
+          <select name="priority">
+            <option value="highest">Highest</option>
+            <option value="high">High</option>
+            <option value="medium" selected>Medium</option>
+            <option value="low">Low</option>
+            <option value="lowest">Lowest</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label>Status
+          <select name="status" id="statusSelect"></select>
+        </label>
+        <label>Story points
+          <input name="points" type="number" min="0" max="100" step="1" placeholder="—">
+        </label>
+      </div>
+      <div class="row">
+        <label>Due date
+          <input name="due" type="date">
+        </label>
+        <label>Due time
+          <input name="dueTime" type="time">
+        </label>
+      </div>
+      <div class="row">
+        <label>Assignee
+          <input name="assignee" list="assigneeList" placeholder="Unassigned">
+          <datalist id="assigneeList"></datalist>
+        </label>
+        <label>Labels (comma separated)
+          <input name="labels" placeholder="frontend, urgent">
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button type="button" id="deleteBtn" class="danger" hidden>Delete</button>
+        <span class="spacer"></span>
+        <button type="button" id="cancelBtn" class="ghost">Cancel</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
