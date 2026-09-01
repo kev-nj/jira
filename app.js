@@ -120,6 +120,7 @@
       completedAt: null,
       rolledFrom: null,
       collapsed: false,
+      starred: false,
     }, task);
   }
 
@@ -211,11 +212,13 @@
       section: el('filterSection').value,
       project: el('filterProject').value,
       person: el('filterPerson').value,
+      starred: el('starBtn').getAttribute('aria-pressed') === 'true',
       hideDone: el('hideDoneBtn').getAttribute('aria-pressed') === 'true',
     };
   }
 
   function matches(task, f) {
+    if (f.starred && !task.starred) return false;
     if (f.hideDone && task.status === 'done') return false;
     if (f.section && task.section !== f.section) return false;
     if (f.project && (task.project || '') !== f.project) return false;
@@ -234,6 +237,7 @@
   function byTimeThenOrder(a, b) {
     if (a.status === 'done' && b.status !== 'done') return 1;
     if (b.status === 'done' && a.status !== 'done') return -1;
+    if (!!a.starred !== !!b.starred) return a.starred ? -1 : 1;
     if (a.time && b.time && a.time !== b.time) return a.time < b.time ? -1 : 1;
     if (a.time && !b.time) return -1;
     if (!a.time && b.time) return 1;
@@ -359,16 +363,19 @@
         list.dataset.date = ui.cursor;
         if (!items.length) list.classList.add('is-empty');
         items.forEach((t) => list.append(card(t)));
-        dropTarget(list, { status: status.id, section: section.id, date: ui.cursor });
         group.append(list);
 
         if (status.id !== 'done') {
           group.append(quickAdd({ status: status.id, section: section.id, date: ui.cursor }));
         }
+        // The whole group accepts drops — its header and blank space included —
+        // so you never have to aim at a thin strip between cards.
+        dropTarget(group, { status: status.id, section: section.id, date: ui.cursor }, list);
         body.append(group);
       }
 
       col.append(body);
+      dropTarget(col, { status: status.id, date: ui.cursor }, col.querySelector('.cards'));
       board.append(col);
     }
 
@@ -459,12 +466,14 @@
         const items = tasksOn(date, f).filter((t) => t.section === section.id);
         if (!items.length) list.classList.add('is-empty');
         items.forEach((t) => list.append(card(t, true)));
-        dropTarget(list, { section: section.id, date });
         group.append(list);
         group.append(quickAdd({ section: section.id, date }, true));
+        dropTarget(group, { section: section.id, date }, list);
         body.append(group);
       }
       col.append(body);
+      // Anywhere else in the column still reschedules to this day.
+      dropTarget(col, { date }, col.querySelector('.cards'));
       board.append(col);
     }
     view.append(board);
@@ -548,6 +557,7 @@
     li.className = 'card';
     if (task.status === 'done') li.classList.add('is-done');
     if (task.status === 'doing') li.classList.add('is-doing');
+    if (task.starred) li.classList.add('is-starred');
     if (compact) li.classList.add('compact');
     li.draggable = true;
     li.dataset.id = task.id;
@@ -574,6 +584,19 @@
     title.className = 'title';
     title.textContent = task.title;
     top.append(title);
+
+    const star = document.createElement('button');
+    star.className = 'star';
+    star.textContent = task.starred ? '★' : '☆';
+    star.setAttribute('aria-pressed', String(!!task.starred));
+    star.title = task.starred ? 'Remove from favourites' : 'Add to favourites';
+    star.addEventListener('click', (e) => {
+      e.stopPropagation();
+      task.starred = !task.starred;
+      save();
+      render();
+    });
+    top.append(star);
     li.append(top);
 
     const meta = document.createElement('div');
@@ -643,6 +666,12 @@
         setStatus(task, NEXT_STATUS[task.status]);
         render();
       }
+      if (e.key === 'f') {
+        e.preventDefault();
+        task.starred = !task.starred;
+        save();
+        render();
+      }
     });
     li.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('text/plain', task.id);
@@ -686,8 +715,13 @@
     li.draggable = true;
     if (task.status === 'done') li.classList.add('is-done');
     if (task.status === 'doing') li.classList.add('is-doing');
+    if (task.starred) li.classList.add('is-starred');
     li.dataset.section = task.section;
     li.append(Object.assign(document.createElement('span'), { textContent: task.title }));
+    if (task.starred) {
+      li.prepend(Object.assign(document.createElement('span'),
+        { className: 'mini-star', textContent: '★' }));
+    }
     if (task.subtasks.length) {
       const done = task.subtasks.filter((x) => x.done).length;
       const badge = document.createElement('span');
@@ -739,6 +773,7 @@
     const list = listForOrder || zone;
     zone.addEventListener('dragover', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       e.dataTransfer.dropEffect = 'move';
       zone.classList.add('over');
     });
@@ -1043,6 +1078,11 @@
   el('newTaskBtn').addEventListener('click', () => openModal(null, { date: ui.cursor }));
   ['search', 'filterSection', 'filterProject', 'filterPerson'].forEach((id) => {
     el(id).addEventListener('input', render);
+  });
+  el('starBtn').addEventListener('click', (e) => {
+    const on = e.currentTarget.getAttribute('aria-pressed') === 'true';
+    e.currentTarget.setAttribute('aria-pressed', String(!on));
+    render();
   });
   el('hideDoneBtn').addEventListener('click', (e) => {
     const on = e.currentTarget.getAttribute('aria-pressed') === 'true';
