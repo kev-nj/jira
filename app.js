@@ -353,6 +353,9 @@
       for (const section of SECTIONS) {
         const group = document.createElement('div');
         group.className = 'group';
+        group.dataset.date = ui.cursor;
+        group.dataset.section = section.id;
+        group.dataset.status = status.id;
 
         const label = document.createElement('div');
         label.className = 'group-head';
@@ -371,11 +374,16 @@
         list.dataset.date = ui.cursor;
         if (!items.length) list.classList.add('is-empty');
         items.forEach((t) => list.append(card(t)));
-        group.append(list);
 
+        // The scroller holds the cards and the add button together, so the
+        // button always sits directly under the last card.
+        const scroll = document.createElement('div');
+        scroll.className = 'group-scroll';
+        scroll.append(list);
         if (status.id !== 'done') {
-          group.append(quickAdd({ status: status.id, section: section.id, date: ui.cursor }));
+          scroll.append(quickAdd({ status: status.id, section: section.id, date: ui.cursor }));
         }
+        group.append(scroll);
         // The whole group accepts drops — its header and blank space included —
         // so you never have to aim at a thin strip between cards.
         dropTarget(group, { status: status.id, section: section.id, date: ui.cursor }, list);
@@ -463,6 +471,9 @@
       for (const section of SECTIONS) {
         const group = document.createElement('div');
         group.className = 'group';
+        group.dataset.date = date;
+        group.dataset.section = section.id;
+
         const label = document.createElement('div');
         label.className = 'group-head';
         label.textContent = section.name;
@@ -470,12 +481,14 @@
 
         const list = document.createElement('ul');
         list.className = 'cards';
-        group.dataset.section = section.id;
         const items = tasksOn(date, f).filter((t) => t.section === section.id);
         if (!items.length) list.classList.add('is-empty');
         items.forEach((t) => list.append(card(t, true)));
-        group.append(list);
-        group.append(quickAdd({ section: section.id, date }, true));
+
+        const scroll = document.createElement('div');
+        scroll.className = 'group-scroll';
+        scroll.append(list, quickAdd({ section: section.id, date }, true));
+        group.append(scroll);
         dropTarget(group, { section: section.id, date }, list);
         body.append(group);
       }
@@ -947,18 +960,17 @@
 
   // Re-render replaces the node, so find the equivalent input and refocus it.
   function reopenQuickAdd(patch) {
-    const groups = [...view.querySelectorAll('.group')];
-    const target = groups.find((g) => {
-      const list = g.querySelector('.cards');
-      if (!list) return false;
-      return (!patch.date || list.dataset.date === patch.date || !list.dataset.date)
-        && (!patch.section || list.dataset.section === patch.section || !list.dataset.section);
-    });
+    const target = [...view.querySelectorAll('.group')].find((g) =>
+      (!patch.date || g.dataset.date === patch.date)
+      && (!patch.section || g.dataset.section === patch.section)
+      && (!patch.status || g.dataset.status === patch.status));
     const input = target && target.querySelector('.quick input');
     if (!input) return;
     input.previousElementSibling.hidden = true;
     input.hidden = false;
     input.focus();
+    // Keep the section you are typing into in view after the re-render.
+    target.querySelector('.group-scroll').scrollTop = target.querySelector('.group-scroll').scrollHeight;
   }
 
   // =========================================================================

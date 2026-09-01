@@ -123,7 +123,7 @@ textarea{resize:vertical}
   font-size:12px;font-weight:600;color:var(--muted);
 }
 .column-body{
-  flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;padding-bottom:8px;
+  flex:1;min-height:0;overflow:hidden;padding-bottom:8px;
   display:flex;flex-direction:column;
 }
 .dot{width:7px;height:7px;border-radius:50%;flex:none}
@@ -136,8 +136,15 @@ textarea{resize:vertical}
   background:color-mix(in srgb,var(--text) 7%,transparent);border-radius:20px;padding:1px 8px;
 }
 
-.group{padding:0 0 2px;flex:1 1 auto;min-height:64px;display:flex;flex-direction:column;border-radius:10px}
-.group .cards{flex:1}
+/* Each section takes an equal share of the column, so the second header lands
+   at the same height in every column no matter how many cards sit above it. */
+.group{
+  padding:0 0 2px;flex:1 1 0;min-height:0;display:flex;flex-direction:column;border-radius:10px;
+}
+.group + .group{border-top:1px solid var(--line)}
+.group-head{flex:none}
+.group-scroll{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;overscroll-behavior:contain}
+.group .cards{flex:none}
 /* Highlight the whole section being dropped into, not a sliver of it. */
 .group.over,.column.over{background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--line-strong)}
 .column.over{border-radius:14px}
@@ -151,7 +158,7 @@ textarea{resize:vertical}
   display:flex;flex-direction:column;gap:5px;border-radius:10px;
 }
 /* Empty groups collapse to a thin drop strip rather than a placeholder row. */
-.cards.is-empty{min-height:8px}
+.cards.is-empty{min-height:6px}
 .cell.over{background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--line-strong)}
 
 /* ---- day toolbar -------------------------------------------------------- */
@@ -264,7 +271,7 @@ textarea{resize:vertical}
 /* The collapse control reads as a disclosure, not a static badge. */
 .sub-toggle[aria-expanded=true]{background:transparent;box-shadow:inset 0 0 0 1px var(--line-strong)}
 
-.quick{padding:3px 8px 0}
+.quick{padding:3px 8px 6px}
 .quick input{font-size:13px;padding:7px 9px;border-color:var(--line-strong);border-radius:var(--radius)}
 .add-card{
   margin:0;width:100%;text-align:left;color:var(--faint);font-size:12.5px;font-weight:450;
