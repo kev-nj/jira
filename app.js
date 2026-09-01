@@ -98,7 +98,10 @@
   let ui = { view: VIEWS.includes(state.view) ? state.view : 'day', cursor: todayISO() };
 
   function blank() {
-    return { version: 2, name: 'To-Do Board', prefix: 'T', counter: 0, view: 'day', tasks: [] };
+    return {
+      version: 2, name: 'To-Do Board', prefix: 'T', counter: 0,
+      view: 'day', sort: 'manual', tasks: [],
+    };
   }
 
   function normalise(task) {
@@ -232,15 +235,20 @@
   }
 
   const tasksOn = (date, f) =>
-    state.tasks.filter((t) => t.date === date && matches(t, f)).sort(byTimeThenOrder);
+    state.tasks.filter((t) => t.date === date && matches(t, f)).sort(compare);
 
-  function byTimeThenOrder(a, b) {
+  // Two orderings. 'manual' honours where you dragged a card, which means the
+  // manual order has to outrank everything except finished work sinking down.
+  // 'time' schedules the day for you and ignores manual placement.
+  function compare(a, b) {
     if (a.status === 'done' && b.status !== 'done') return 1;
     if (b.status === 'done' && a.status !== 'done') return -1;
-    if (!!a.starred !== !!b.starred) return a.starred ? -1 : 1;
-    if (a.time && b.time && a.time !== b.time) return a.time < b.time ? -1 : 1;
-    if (a.time && !b.time) return -1;
-    if (!a.time && b.time) return 1;
+    if (state.sort === 'time') {
+      if (!!a.starred !== !!b.starred) return a.starred ? -1 : 1;
+      if (a.time && b.time && a.time !== b.time) return a.time < b.time ? -1 : 1;
+      if (a.time && !b.time) return -1;
+      if (!a.time && b.time) return 1;
+    }
     return a.order - b.order;
   }
 
@@ -674,11 +682,18 @@
       }
     });
     li.addEventListener('dragstart', (e) => {
+      e.stopPropagation();
+      draggingId = task.id;
       e.dataTransfer.setData('text/plain', task.id);
       e.dataTransfer.effectAllowed = 'move';
       li.classList.add('dragging');
     });
-    li.addEventListener('dragend', () => li.classList.remove('dragging'));
+    li.addEventListener('dragend', () => {
+      draggingId = null;
+      li.classList.remove('dragging');
+      clearInsertPoint();
+      view.querySelectorAll('.over').forEach((n) => n.classList.remove('over'));
+    });
     return li;
   }
 
@@ -769,6 +784,8 @@
   // Drag and drop. A drop applies whichever fields the zone declares, so the
   // same handler moves a task between statuses, sections, and days.
   // =========================================================================
+  let draggingId = null;
+
   function dropTarget(zone, patch, listForOrder) {
     const list = listForOrder || zone;
     zone.addEventListener('dragover', (e) => {
@@ -776,23 +793,57 @@
       e.stopPropagation();
       e.dataTransfer.dropEffect = 'move';
       zone.classList.add('over');
+      showInsertPoint(list, e.clientY);
     });
     zone.addEventListener('dragleave', (e) => {
-      if (!zone.contains(e.relatedTarget)) zone.classList.remove('over');
+      if (zone.contains(e.relatedTarget)) return;
+      zone.classList.remove('over');
+      clearInsertPoint();
     });
     zone.addEventListener('drop', (e) => {
       e.preventDefault();
       e.stopPropagation();
       zone.classList.remove('over');
-      const task = byId(e.dataTransfer.getData('text/plain'));
+      clearInsertPoint();
+      const task = byId(e.dataTransfer.getData('text/plain')) || byId(draggingId);
       if (!task) return;
+      // Dragging is an explicit placement, so respect it even under time sort.
+      if (state.sort === 'time') {
+        state.sort = 'manual';
+        syncSortBtn();
+      }
       if (patch.status && patch.status !== task.status) setStatus(task, patch.status);
       if (patch.section) task.section = patch.section;
       if (patch.date) task.date = patch.date;
       task.order = orderAt(list, e.clientY, task.id);
+      draggingId = null;
       save();
       render();
     });
+  }
+
+  // A line showing exactly where the card will land.
+  function clearInsertPoint() {
+    view.querySelectorAll('.drop-before,.drop-after')
+      .forEach((n) => n.classList.remove('drop-before', 'drop-after'));
+  }
+
+  function showInsertPoint(list, y) {
+    clearInsertPoint();
+    const cards = [...list.querySelectorAll('.card,.mini-card')]
+      .filter((c) => !c.classList.contains('dragging'));
+    if (!cards.length) {
+      list.classList.add('drop-before');
+      return;
+    }
+    for (const node of cards) {
+      const box = node.getBoundingClientRect();
+      if (y <= box.top + box.height / 2) {
+        node.classList.add('drop-before');
+        return;
+      }
+    }
+    cards[cards.length - 1].classList.add('drop-after');
   }
 
   function orderAt(list, y, draggedId) {
@@ -1110,6 +1161,18 @@
       setView({ 1: 'day', 2: 'workweek', 3: 'week', 4: 'month' }[e.key]);
     }
   });
+
+  const sortBtn = el('sortBtn');
+  function syncSortBtn() {
+    sortBtn.textContent = state.sort === 'time' ? 'Sort manually (drag)' : 'Sort by time';
+  }
+  sortBtn.addEventListener('click', () => {
+    state.sort = state.sort === 'time' ? 'manual' : 'time';
+    save();
+    syncSortBtn();
+    render();
+  });
+  syncSortBtn();
 
   el('rollOverdueBtn').addEventListener('click', rollOverdue);
 

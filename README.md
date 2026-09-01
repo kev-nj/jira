@@ -15,6 +15,10 @@ browser's `localStorage` under `todo-board.v2`.
 - **Subtasks** with their own checkboxes; cards show `2/3` progress and expand inline
 - Tick the checkbox on a card to complete it; drag cards between columns, sections, and days
 - Quick-add inputs per section for fast capture
+- **Favourites** (★) sort to the top and can be filtered on
+- **Drag to rearrange** within a section; an insertion line shows where the card lands.
+  Manual order is the default; `⋯ → Sort by time` orders each day by clock time instead,
+  and dragging a card switches back to manual.
 
 ## Rollover
 - Per-day: "Move N unfinished to tomorrow" in Day view, `↦` per column in Week view

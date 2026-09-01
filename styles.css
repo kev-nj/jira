@@ -169,14 +169,22 @@ textarea{resize:vertical}
 }
 
 /* ---- cards -------------------------------------------------------------- */
+/* Without this, grabbing a card by its title starts a text-selection drag and
+   the drop payload is the selected words instead of the task id. */
+.card,.mini-card{user-select:none;-webkit-user-select:none;-webkit-user-drag:element}
+.card input,.card textarea{user-select:text;-webkit-user-select:text}
 .card{
   background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
-  padding:7px 9px;cursor:pointer;box-shadow:var(--shadow);
+  padding:7px 9px;cursor:grab;box-shadow:var(--shadow);
   transition:border-color .13s ease,transform .13s ease,opacity .13s ease;
 }
 .card:hover{border-color:var(--line-strong);transform:translateY(-1px)}
 .card:focus-visible{outline:none;box-shadow:var(--ring)}
 .card.dragging{opacity:.4;transform:rotate(1.2deg)}
+/* Insertion line: shows exactly where a dragged card will land. */
+.card.drop-before,.mini-card.drop-before{box-shadow:0 -2px 0 -.5px var(--text)}
+.card.drop-after,.mini-card.drop-after{box-shadow:0 2px 0 -.5px var(--text)}
+.cards.drop-before{box-shadow:inset 0 2px 0 -.5px var(--text)}
 .card.is-doing{border-left:2px solid var(--text);padding-left:8px}
 .card.is-done{opacity:.6}
 .card.is-done .title{text-decoration:line-through;text-decoration-color:var(--line-strong);color:var(--muted)}
