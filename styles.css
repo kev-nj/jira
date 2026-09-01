@@ -122,7 +122,10 @@ textarea{resize:vertical}
   display:flex;align-items:center;gap:8px;padding:11px 13px 7px;
   font-size:12px;font-weight:600;color:var(--muted);
 }
-.column-body{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;padding-bottom:8px}
+.column-body{
+  flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;padding-bottom:8px;
+  display:flex;flex-direction:column;
+}
 .dot{width:7px;height:7px;border-radius:50%;flex:none}
 .dot[data-status=todo]{box-shadow:inset 0 0 0 1.5px var(--faint)}
 .dot[data-status=doing]{background:linear-gradient(90deg,var(--text) 50%,transparent 50%);
@@ -133,7 +136,11 @@ textarea{resize:vertical}
   background:color-mix(in srgb,var(--text) 7%,transparent);border-radius:20px;padding:1px 8px;
 }
 
-.group{padding:0 0 2px}
+.group{padding:0 0 2px;flex:1 1 auto;min-height:64px;display:flex;flex-direction:column;border-radius:10px}
+.group .cards{flex:1}
+/* Highlight the whole section being dropped into, not a sliver of it. */
+.group.over,.column.over{background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.column.over{border-radius:14px}
 .group-head{
   display:flex;align-items:center;gap:6px;padding:8px 13px 5px;
   font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);
@@ -145,7 +152,7 @@ textarea{resize:vertical}
 }
 /* Empty groups collapse to a thin drop strip rather than a placeholder row. */
 .cards.is-empty{min-height:8px}
-.cards.over,.cell.over{background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.cell.over{background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--line-strong)}
 
 /* ---- day toolbar -------------------------------------------------------- */
 .daybar{
@@ -162,19 +169,40 @@ textarea{resize:vertical}
 }
 
 /* ---- cards -------------------------------------------------------------- */
+/* Without this, grabbing a card by its title starts a text-selection drag and
+   the drop payload is the selected words instead of the task id. */
+.card,.mini-card{user-select:none;-webkit-user-select:none;-webkit-user-drag:element}
+.card input,.card textarea{user-select:text;-webkit-user-select:text}
 .card{
   background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
-  padding:7px 9px;cursor:pointer;box-shadow:var(--shadow);
+  padding:7px 9px;cursor:grab;box-shadow:var(--shadow);
   transition:border-color .13s ease,transform .13s ease,opacity .13s ease;
 }
 .card:hover{border-color:var(--line-strong);transform:translateY(-1px)}
 .card:focus-visible{outline:none;box-shadow:var(--ring)}
 .card.dragging{opacity:.4;transform:rotate(1.2deg)}
+/* Insertion line: shows exactly where a dragged card will land. */
+.card.drop-before,.mini-card.drop-before{box-shadow:0 -2px 0 -.5px var(--text)}
+.card.drop-after,.mini-card.drop-after{box-shadow:0 2px 0 -.5px var(--text)}
+.cards.drop-before{box-shadow:inset 0 2px 0 -.5px var(--text)}
 .card.is-doing{border-left:2px solid var(--text);padding-left:8px}
 .card.is-done{opacity:.6}
 .card.is-done .title{text-decoration:line-through;text-decoration-color:var(--line-strong);color:var(--muted)}
 .card-top{display:flex;gap:8px;align-items:flex-start}
 .title{font-size:13px;font-weight:500;line-height:1.38;flex:1;min-width:0;word-break:break-word}
+.star{
+  flex:none;padding:0;width:18px;height:18px;line-height:1;font-size:13px;
+  color:var(--faint);background:transparent;border-radius:5px;
+  opacity:0;transition:opacity .12s ease,color .12s ease;
+}
+.card:hover .star,.star:focus-visible{opacity:1}
+.star:hover{color:var(--text);background:transparent}
+.star[aria-pressed=true]{opacity:1;color:var(--text)}
+.card.is-starred{border-color:var(--line-strong)}
+@media (hover:none){.star{opacity:1}}
+.mini-star{flex:none;font-size:9px;color:var(--text)}
+#starBtn[aria-pressed=true]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+#starBtn[aria-pressed=true]:hover{background:var(--accent);opacity:.88}
 
 .check{
   position:relative;width:15px;height:15px;flex:none;margin-top:2px;padding:0;border-radius:5px;

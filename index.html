@@ -35,11 +35,13 @@
     </select>
     <select id="filterProject"><option value="">All projects</option></select>
     <select id="filterPerson"><option value="">Everyone</option></select>
+    <button id="starBtn" class="ghost" aria-pressed="false" title="Show favourites only">★</button>
     <button id="hideDoneBtn" class="ghost wide" aria-pressed="false">Hide done</button>
     <button id="newTaskBtn" class="primary">+ Add task</button>
     <div class="menu">
       <button id="menuBtn" class="ghost" aria-haspopup="true">⋯</button>
       <div id="menuList" class="menu-list" hidden>
+        <button id="sortBtn">Sort by time</button>
         <button id="rollOverdueBtn">Pull overdue into today</button>
         <button id="exportBtn">Export JSON</button>
         <button id="importBtn">Import JSON</button>

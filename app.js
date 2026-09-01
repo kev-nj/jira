@@ -98,7 +98,10 @@
   let ui = { view: VIEWS.includes(state.view) ? state.view : 'day', cursor: todayISO() };
 
   function blank() {
-    return { version: 2, name: 'To-Do Board', prefix: 'T', counter: 0, view: 'day', tasks: [] };
+    return {
+      version: 2, name: 'To-Do Board', prefix: 'T', counter: 0,
+      view: 'day', sort: 'manual', tasks: [],
+    };
   }
 
   function normalise(task) {
@@ -120,6 +123,7 @@
       completedAt: null,
       rolledFrom: null,
       collapsed: false,
+      starred: false,
     }, task);
   }
 
@@ -211,11 +215,13 @@
       section: el('filterSection').value,
       project: el('filterProject').value,
       person: el('filterPerson').value,
+      starred: el('starBtn').getAttribute('aria-pressed') === 'true',
       hideDone: el('hideDoneBtn').getAttribute('aria-pressed') === 'true',
     };
   }
 
   function matches(task, f) {
+    if (f.starred && !task.starred) return false;
     if (f.hideDone && task.status === 'done') return false;
     if (f.section && task.section !== f.section) return false;
     if (f.project && (task.project || '') !== f.project) return false;
@@ -229,14 +235,20 @@
   }
 
   const tasksOn = (date, f) =>
-    state.tasks.filter((t) => t.date === date && matches(t, f)).sort(byTimeThenOrder);
+    state.tasks.filter((t) => t.date === date && matches(t, f)).sort(compare);
 
-  function byTimeThenOrder(a, b) {
+  // Two orderings. 'manual' honours where you dragged a card, which means the
+  // manual order has to outrank everything except finished work sinking down.
+  // 'time' schedules the day for you and ignores manual placement.
+  function compare(a, b) {
     if (a.status === 'done' && b.status !== 'done') return 1;
     if (b.status === 'done' && a.status !== 'done') return -1;
-    if (a.time && b.time && a.time !== b.time) return a.time < b.time ? -1 : 1;
-    if (a.time && !b.time) return -1;
-    if (!a.time && b.time) return 1;
+    if (state.sort === 'time') {
+      if (!!a.starred !== !!b.starred) return a.starred ? -1 : 1;
+      if (a.time && b.time && a.time !== b.time) return a.time < b.time ? -1 : 1;
+      if (a.time && !b.time) return -1;
+      if (!a.time && b.time) return 1;
+    }
     return a.order - b.order;
   }
 
@@ -359,16 +371,19 @@
         list.dataset.date = ui.cursor;
         if (!items.length) list.classList.add('is-empty');
         items.forEach((t) => list.append(card(t)));
-        dropTarget(list, { status: status.id, section: section.id, date: ui.cursor });
         group.append(list);
 
         if (status.id !== 'done') {
           group.append(quickAdd({ status: status.id, section: section.id, date: ui.cursor }));
         }
+        // The whole group accepts drops — its header and blank space included —
+        // so you never have to aim at a thin strip between cards.
+        dropTarget(group, { status: status.id, section: section.id, date: ui.cursor }, list);
         body.append(group);
       }
 
       col.append(body);
+      dropTarget(col, { status: status.id, date: ui.cursor }, col.querySelector('.cards'));
       board.append(col);
     }
 
@@ -459,12 +474,14 @@
         const items = tasksOn(date, f).filter((t) => t.section === section.id);
         if (!items.length) list.classList.add('is-empty');
         items.forEach((t) => list.append(card(t, true)));
-        dropTarget(list, { section: section.id, date });
         group.append(list);
         group.append(quickAdd({ section: section.id, date }, true));
+        dropTarget(group, { section: section.id, date }, list);
         body.append(group);
       }
       col.append(body);
+      // Anywhere else in the column still reschedules to this day.
+      dropTarget(col, { date }, col.querySelector('.cards'));
       board.append(col);
     }
     view.append(board);
@@ -548,6 +565,7 @@
     li.className = 'card';
     if (task.status === 'done') li.classList.add('is-done');
     if (task.status === 'doing') li.classList.add('is-doing');
+    if (task.starred) li.classList.add('is-starred');
     if (compact) li.classList.add('compact');
     li.draggable = true;
     li.dataset.id = task.id;
@@ -574,6 +592,19 @@
     title.className = 'title';
     title.textContent = task.title;
     top.append(title);
+
+    const star = document.createElement('button');
+    star.className = 'star';
+    star.textContent = task.starred ? '★' : '☆';
+    star.setAttribute('aria-pressed', String(!!task.starred));
+    star.title = task.starred ? 'Remove from favourites' : 'Add to favourites';
+    star.addEventListener('click', (e) => {
+      e.stopPropagation();
+      task.starred = !task.starred;
+      save();
+      render();
+    });
+    top.append(star);
     li.append(top);
 
     const meta = document.createElement('div');
@@ -643,13 +674,26 @@
         setStatus(task, NEXT_STATUS[task.status]);
         render();
       }
+      if (e.key === 'f') {
+        e.preventDefault();
+        task.starred = !task.starred;
+        save();
+        render();
+      }
     });
     li.addEventListener('dragstart', (e) => {
+      e.stopPropagation();
+      draggingId = task.id;
       e.dataTransfer.setData('text/plain', task.id);
       e.dataTransfer.effectAllowed = 'move';
       li.classList.add('dragging');
     });
-    li.addEventListener('dragend', () => li.classList.remove('dragging'));
+    li.addEventListener('dragend', () => {
+      draggingId = null;
+      li.classList.remove('dragging');
+      clearInsertPoint();
+      view.querySelectorAll('.over').forEach((n) => n.classList.remove('over'));
+    });
     return li;
   }
 
@@ -686,8 +730,13 @@
     li.draggable = true;
     if (task.status === 'done') li.classList.add('is-done');
     if (task.status === 'doing') li.classList.add('is-doing');
+    if (task.starred) li.classList.add('is-starred');
     li.dataset.section = task.section;
     li.append(Object.assign(document.createElement('span'), { textContent: task.title }));
+    if (task.starred) {
+      li.prepend(Object.assign(document.createElement('span'),
+        { className: 'mini-star', textContent: '★' }));
+    }
     if (task.subtasks.length) {
       const done = task.subtasks.filter((x) => x.done).length;
       const badge = document.createElement('span');
@@ -735,29 +784,66 @@
   // Drag and drop. A drop applies whichever fields the zone declares, so the
   // same handler moves a task between statuses, sections, and days.
   // =========================================================================
+  let draggingId = null;
+
   function dropTarget(zone, patch, listForOrder) {
     const list = listForOrder || zone;
     zone.addEventListener('dragover', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       e.dataTransfer.dropEffect = 'move';
       zone.classList.add('over');
+      showInsertPoint(list, e.clientY);
     });
     zone.addEventListener('dragleave', (e) => {
-      if (!zone.contains(e.relatedTarget)) zone.classList.remove('over');
+      if (zone.contains(e.relatedTarget)) return;
+      zone.classList.remove('over');
+      clearInsertPoint();
     });
     zone.addEventListener('drop', (e) => {
       e.preventDefault();
       e.stopPropagation();
       zone.classList.remove('over');
-      const task = byId(e.dataTransfer.getData('text/plain'));
+      clearInsertPoint();
+      const task = byId(e.dataTransfer.getData('text/plain')) || byId(draggingId);
       if (!task) return;
+      // Dragging is an explicit placement, so respect it even under time sort.
+      if (state.sort === 'time') {
+        state.sort = 'manual';
+        syncSortBtn();
+      }
       if (patch.status && patch.status !== task.status) setStatus(task, patch.status);
       if (patch.section) task.section = patch.section;
       if (patch.date) task.date = patch.date;
       task.order = orderAt(list, e.clientY, task.id);
+      draggingId = null;
       save();
       render();
     });
+  }
+
+  // A line showing exactly where the card will land.
+  function clearInsertPoint() {
+    view.querySelectorAll('.drop-before,.drop-after')
+      .forEach((n) => n.classList.remove('drop-before', 'drop-after'));
+  }
+
+  function showInsertPoint(list, y) {
+    clearInsertPoint();
+    const cards = [...list.querySelectorAll('.card,.mini-card')]
+      .filter((c) => !c.classList.contains('dragging'));
+    if (!cards.length) {
+      list.classList.add('drop-before');
+      return;
+    }
+    for (const node of cards) {
+      const box = node.getBoundingClientRect();
+      if (y <= box.top + box.height / 2) {
+        node.classList.add('drop-before');
+        return;
+      }
+    }
+    cards[cards.length - 1].classList.add('drop-after');
   }
 
   function orderAt(list, y, draggedId) {
@@ -1044,6 +1130,11 @@
   ['search', 'filterSection', 'filterProject', 'filterPerson'].forEach((id) => {
     el(id).addEventListener('input', render);
   });
+  el('starBtn').addEventListener('click', (e) => {
+    const on = e.currentTarget.getAttribute('aria-pressed') === 'true';
+    e.currentTarget.setAttribute('aria-pressed', String(!on));
+    render();
+  });
   el('hideDoneBtn').addEventListener('click', (e) => {
     const on = e.currentTarget.getAttribute('aria-pressed') === 'true';
     e.currentTarget.setAttribute('aria-pressed', String(!on));
@@ -1070,6 +1161,18 @@
       setView({ 1: 'day', 2: 'workweek', 3: 'week', 4: 'month' }[e.key]);
     }
   });
+
+  const sortBtn = el('sortBtn');
+  function syncSortBtn() {
+    sortBtn.textContent = state.sort === 'time' ? 'Sort manually (drag)' : 'Sort by time';
+  }
+  sortBtn.addEventListener('click', () => {
+    state.sort = state.sort === 'time' ? 'manual' : 'time';
+    save();
+    syncSortBtn();
+    render();
+  });
+  syncSortBtn();
 
   el('rollOverdueBtn').addEventListener('click', rollOverdue);
 
