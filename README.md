@@ -1,31 +1,37 @@
-# Jira Board
+# To-Do Board
 
-A single-page kanban board. No build step, no backend — all data lives in the browser's `localStorage`
-under the key `jira-board.v1`.
+A kanban-style planner for daily to-dos. No build step, no backend — everything lives in the
+browser's `localStorage` under `todo-board.v2`.
 
-## Features
-- Four columns: To Do, In Progress, In Review, Done
-- Create / edit / delete issues (type, priority, status, story points, assignee, labels)
-- Due date **and** time per task, with Today / Tomorrow / overdue chips
-- Live clock and a running "N due today · N overdue" count in the header
-- **Due today** filter for working the day, and inline quick-add per column
-- Dated tasks sort to the top of their column, soonest first
-- Drag and drop between and within columns, with order preserved
-- Search + filter by assignee, type, priority
-- Export / import the board as JSON, load sample data, clear the board
-- Light and dark theme following the OS setting
-- `c` opens the create dialog, `Esc` closes it
+## Views
+- **Day** — three status columns (To Do / In Progress / Done), each split into **Project** and
+  **Non-project** sections. A toolbar button moves the day's unfinished tasks to the next day.
+- **Work** — Monday–Friday only; rolling Friday's leftovers skips the weekend and lands on Monday.
+- **Week** — Monday–Sunday columns, each with both sections and its own rollover button (`↦`).
+- **Month** — calendar grid; click a date number to open that day.
+
+## Tasks
+- Title, notes, section, project, **assignee**, date, time, status, priority
+- **Subtasks** with their own checkboxes; cards show `2/3` progress and expand inline
+- Tick the checkbox on a card to complete it; drag cards between columns, sections, and days
+- Quick-add inputs per section for fast capture
+
+## Rollover
+- Per-day: "Move N unfinished to tomorrow" in Day view, `↦` per column in Week view
+- Global: **Pull overdue into today** in the `⋯` menu
+- Rolled tasks are marked with `↦` and remember the day they came from
+
+## Keyboard
+`1` `2` `3` `4` switch views · `←` `→` move through time · `t` jump to today · `n` new task ·
+`Space` toggle done on a focused card · `Esc` close the dialog
 
 ## Run locally
-Open `index.html` directly, or serve it:
-
-    python3 -m http.server 8000
+Open `index.html`, or serve it with `python3 -m http.server 8000`. Note that `file://` and
+`localhost` have separate localStorage, so pick one.
 
 ## Deploy to GitHub Pages
-1. Push these files to the repository root on `main`.
-2. Settings → Pages → Source: **Deploy from a branch**, branch `main`, folder `/ (root)`.
-3. The board appears at `https://<user>.github.io/<repo>/`.
+Push to `main`, then Settings → Pages → Deploy from a branch → `main` → `/ (root)`.
 
 ## Notes
-Data is per-browser and per-origin: it does not sync between devices, and clearing site data erases
-the board. Use **Export JSON** to keep a backup.
+Data is per-browser and per-origin; it does not sync between devices. Use **Export JSON** to back it
+up. Tasks from the earlier `jira-board.v1` board are migrated automatically on first load.

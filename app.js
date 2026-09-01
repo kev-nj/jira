@@ -1,267 +1,644 @@
+/* To-Do Board — a kanban-style daily/weekly/monthly planner.
+   Everything lives in localStorage; there is no backend. */
 (() => {
   'use strict';
 
-  const STORAGE_KEY = 'jira-board.v1';
-  const COLUMNS = [
+  const STORAGE_KEY = 'todo-board.v2';
+  const LEGACY_KEY = 'jira-board.v1';
+
+  const STATUSES = [
     { id: 'todo', name: 'To Do' },
-    { id: 'inprogress', name: 'In Progress' },
-    { id: 'review', name: 'In Review' },
+    { id: 'doing', name: 'In Progress' },
     { id: 'done', name: 'Done' },
   ];
-  const TYPE_LABEL = { story: 'Story', task: 'Task', bug: 'Bug', epic: 'Epic' };
-  const PRIORITY_LABEL = {
-    highest: 'Highest', high: 'High', medium: 'Medium', low: 'Low', lowest: 'Lowest',
-  };
-  // Bars drawn for each priority level, tallest first.
-  const PRIORITY_BARS = { highest: 3, high: 3, medium: 2, low: 1, lowest: 1 };
+  const SECTIONS = [
+    { id: 'project', name: 'Project' },
+    { id: 'personal', name: 'Non-project' },
+  ];
+  const PRIORITY_BARS = { high: 3, medium: 2, low: 1 };
+  const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   const el = (id) => document.getElementById(id);
+  const view = el('view');
 
-  // ---- dates --------------------------------------------------------------
-  const startOfDay = (d) => { const c = new Date(d); c.setHours(0, 0, 0, 0); return c; };
-  const todayISO = () => localISO(new Date());
+  // =========================================================================
+  // Dates. Everything is a local YYYY-MM-DD string; no timezone maths.
+  // =========================================================================
+  const pad = (n) => String(n).padStart(2, '0');
+  const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const parse = (s) => new Date(`${s}T00:00:00`);
+  const todayISO = () => iso(new Date());
 
-  function localISO(date) {
-    const p = (n) => String(n).padStart(2, '0');
-    return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}`;
+  function addDays(isoStr, n) {
+    const d = parse(isoStr);
+    d.setDate(d.getDate() + n);
+    return iso(d);
   }
 
-  // Days from today to `iso`: 0 today, negative in the past.
-  function daysAway(iso) {
-    return Math.round((startOfDay(new Date(`${iso}T00:00:00`)) - startOfDay(new Date())) / 86400000);
+  function addMonths(isoStr, n) {
+    const d = parse(isoStr);
+    const day = d.getDate();
+    d.setDate(1);
+    d.setMonth(d.getMonth() + n);
+    // Clamp so 31 Jan + 1 month lands on the last day of February, not in March.
+    d.setDate(Math.min(day, daysInMonth(d.getFullYear(), d.getMonth())));
+    return iso(d);
   }
 
-  function dueState(issue) {
-    if (!issue.due) return null;
-    const days = daysAway(issue.due);
-    if (issue.status === 'done') return 'done';
-    if (days < 0) return 'overdue';
-    if (days === 0) {
-      if (!issue.dueTime) return 'today';
-      const [h, m] = issue.dueTime.split(':').map(Number);
-      const at = new Date(); at.setHours(h, m, 0, 0);
-      return at < new Date() ? 'overdue' : 'today';
+  const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
+
+  // Weeks run Monday to Sunday.
+  function startOfWeek(isoStr) {
+    const d = parse(isoStr);
+    const shift = (d.getDay() + 6) % 7;
+    d.setDate(d.getDate() - shift);
+    return iso(d);
+  }
+
+  function weekDates(isoStr, length = 7) {
+    const start = startOfWeek(isoStr);
+    return Array.from({ length }, (_, i) => addDays(start, i));
+  }
+
+  // Full weeks covering the month, so the calendar grid is always rectangular.
+  function monthGrid(isoStr) {
+    const d = parse(isoStr);
+    const first = iso(new Date(d.getFullYear(), d.getMonth(), 1));
+    const last = iso(new Date(d.getFullYear(), d.getMonth(), daysInMonth(d.getFullYear(), d.getMonth())));
+    const cells = [];
+    for (let day = startOfWeek(first); day <= startOfWeek(last) || cells.length % 7; day = addDays(day, 1)) {
+      cells.push(day);
+      if (day > last && cells.length % 7 === 0) break;
     }
-    if (days === 1) return 'tomorrow';
-    return days < 0 ? 'overdue' : 'later';
+    return cells;
   }
 
-  function dueText(issue) {
-    const days = daysAway(issue.due);
-    const time = issue.dueTime ? ` ${fmtTime(issue.dueTime)}` : '';
-    if (days === 0) return `Today${time}`;
-    if (days === 1) return `Tomorrow${time}`;
-    if (days === -1) return `Yesterday${time}`;
-    if (days < 0) return `${Math.abs(days)}d overdue`;
-    if (days <= 6) {
-      const d = new Date(`${issue.due}T00:00:00`);
-      return d.toLocaleDateString(undefined, { weekday: 'short' }) + time;
-    }
-    return new Date(`${issue.due}T00:00:00`)
-      .toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  }
+  const daysAway = (isoStr) => Math.round((parse(isoStr) - parse(todayISO())) / 86400000);
 
   function fmtTime(hhmm) {
     const [h, m] = hhmm.split(':').map(Number);
-    const d = new Date(); d.setHours(h, m, 0, 0);
+    const d = new Date();
+    d.setHours(h, m, 0, 0);
     return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   }
-  const board = el('board');
 
+  function dayLabel(isoStr) {
+    const away = daysAway(isoStr);
+    if (away === 0) return 'Today';
+    if (away === 1) return 'Tomorrow';
+    if (away === -1) return 'Yesterday';
+    return parse(isoStr).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+  }
+
+  // =========================================================================
+  // State
+  // =========================================================================
   let state = load();
+  const VIEWS = ['day', 'workweek', 'week', 'month'];
+  let ui = { view: VIEWS.includes(state.view) ? state.view : 'day', cursor: todayISO() };
 
   function blank() {
-    return { projectKey: 'JB', projectName: 'My Project', counter: 0, issues: [] };
+    return { version: 2, name: 'To-Do Board', prefix: 'T', counter: 0, view: 'day', tasks: [] };
+  }
+
+  function normalise(task) {
+    return Object.assign({
+      id: crypto.randomUUID(),
+      key: '',
+      title: '',
+      notes: '',
+      status: 'todo',
+      section: 'personal',
+      project: '',
+      assignee: '',
+      date: todayISO(),
+      time: null,
+      priority: 'medium',
+      subtasks: [],
+      order: 0,
+      createdAt: Date.now(),
+      completedAt: null,
+      rolledFrom: null,
+      collapsed: false,
+    }, task);
   }
 
   function load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return blank();
-      const parsed = JSON.parse(raw);
-      if (!parsed || !Array.isArray(parsed.issues)) return blank();
-      return Object.assign(blank(), parsed);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.tasks)) {
+          const s = Object.assign(blank(), parsed);
+          s.tasks = s.tasks.map(normalise);
+          return s;
+        }
+      }
+      const legacy = localStorage.getItem(LEGACY_KEY);
+      if (legacy) return migrate(JSON.parse(legacy));
     } catch (e) {
-      console.warn('Could not read saved board, starting fresh.', e);
-      return blank();
+      console.warn('Could not read saved board; starting fresh.', e);
     }
+    return blank();
+  }
+
+  // Carry over anything from the old kanban board so no work is lost.
+  function migrate(old) {
+    const s = blank();
+    if (!old || !Array.isArray(old.issues)) return s;
+    s.counter = old.counter || 0;
+    s.tasks = old.issues.map((i) => normalise({
+      id: i.id,
+      key: i.key,
+      title: i.title,
+      notes: i.description || '',
+      status: i.status === 'done' ? 'done' : (i.status === 'todo' ? 'todo' : 'doing'),
+      // The old board had no sections; anything with a label or points reads
+      // as project work, the rest as personal.
+      section: (i.labels && i.labels.length) || i.points ? 'project' : 'personal',
+      project: (i.labels && i.labels[0]) || '',
+      assignee: i.assignee || '',
+      date: i.due || todayISO(),
+      time: i.dueTime || null,
+      priority: ['highest', 'high'].includes(i.priority) ? 'high'
+        : (['low', 'lowest'].includes(i.priority) ? 'low' : 'medium'),
+      order: i.order || 0,
+      createdAt: i.createdAt || Date.now(),
+    }));
+    return s;
   }
 
   function save() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch (e) {
-      console.error('Could not save board.', e);
+      console.error('Could not save.', e);
       alert('Saving failed — browser storage may be full or blocked.');
     }
   }
 
-  function nextKey() {
-    state.counter += 1;
-    return `${state.projectKey}-${state.counter}`;
+  const nextKey = () => `${state.prefix}-${(state.counter += 1)}`;
+  const byId = (id) => state.tasks.find((t) => t.id === id);
+
+  function createTask(data) {
+    const peers = state.tasks.filter((t) => t.date === (data.date || todayISO()));
+    const task = normalise(Object.assign({
+      key: nextKey(),
+      order: peers.length ? Math.max(...peers.map((t) => t.order)) + 1 : 0,
+    }, data));
+    state.tasks.push(task);
+    save();
+    return task;
   }
 
-  function initials(name) {
-    return name.trim().split(/\s+/).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
+  function setStatus(task, status) {
+    task.status = status;
+    task.completedAt = status === 'done' ? Date.now() : null;
+    // Finishing a parent implies its subtasks are finished too.
+    if (status === 'done') task.subtasks.forEach((s) => { s.done = true; });
+    save();
   }
 
-  // ---- filtering ----------------------------------------------------------
-  function activeFilters() {
+  // =========================================================================
+  // Filtering
+  // =========================================================================
+  function filters() {
     return {
       q: el('search').value.trim().toLowerCase(),
-      assignee: el('filterAssignee').value,
-      type: el('filterType').value,
-      priority: el('filterPriority').value,
-      today: el('todayBtn').getAttribute('aria-pressed') === 'true',
+      section: el('filterSection').value,
+      project: el('filterProject').value,
+      person: el('filterPerson').value,
+      hideDone: el('hideDoneBtn').getAttribute('aria-pressed') === 'true',
     };
   }
 
-  function matches(issue, f) {
-    if (f.today) {
-      // Keep finished work visible in the day view — dueState() reports 'done'
-      // for it, so test the date directly rather than the display state.
-      if (!issue.due || daysAway(issue.due) > 0) return false;
-    }
-    if (f.assignee && (issue.assignee || '') !== f.assignee) return false;
-    if (f.type && issue.type !== f.type) return false;
-    if (f.priority && issue.priority !== f.priority) return false;
+  function matches(task, f) {
+    if (f.hideDone && task.status === 'done') return false;
+    if (f.section && task.section !== f.section) return false;
+    if (f.project && (task.project || '') !== f.project) return false;
+    if (f.person && (task.assignee || '') !== (f.person === '__none' ? '' : f.person)) return false;
     if (f.q) {
-      const hay = [issue.key, issue.title, issue.description, issue.assignee, ...(issue.labels || [])]
-        .join(' ').toLowerCase();
+      const hay = [task.key, task.title, task.notes, task.project, task.assignee,
+        ...task.subtasks.map((s) => s.title)].join(' ').toLowerCase();
       if (!hay.includes(f.q)) return false;
     }
     return true;
   }
 
-  // ---- rendering ----------------------------------------------------------
+  const tasksOn = (date, f) =>
+    state.tasks.filter((t) => t.date === date && matches(t, f)).sort(byTimeThenOrder);
+
+  function byTimeThenOrder(a, b) {
+    if (a.status === 'done' && b.status !== 'done') return 1;
+    if (b.status === 'done' && a.status !== 'done') return -1;
+    if (a.time && b.time && a.time !== b.time) return a.time < b.time ? -1 : 1;
+    if (a.time && !b.time) return -1;
+    if (!a.time && b.time) return 1;
+    return a.order - b.order;
+  }
+
+  const unfinishedOn = (date) => state.tasks.filter((t) => t.date === date && t.status !== 'done');
+
+  // =========================================================================
+  // Rendering
+  // =========================================================================
   function render() {
-    const f = activeFilters();
-    board.textContent = '';
+    view.textContent = '';
+    view.dataset.view = ui.view;
+    if (ui.view === 'day') renderDay();
+    else if (ui.view === 'week') renderWeek(weekDates(ui.cursor));
+    else if (ui.view === 'workweek') renderWeek(weekDates(ui.cursor, 5));
+    else renderMonth();
+    syncChrome();
+  }
 
-    for (const col of COLUMNS) {
-      const issues = state.issues
-        .filter((i) => i.status === col.id)
-        .sort(byDueThenOrder);
-      const shown = issues.filter((i) => matches(i, f));
+  function syncChrome() {
+    document.querySelectorAll('.segmented button').forEach((b) => {
+      b.setAttribute('aria-selected', String(b.dataset.view === ui.view));
+    });
 
-      const section = document.createElement('section');
-      section.className = 'column';
-      section.dataset.status = col.id;
+    if (ui.view === 'day') {
+      el('periodTitle').textContent = dayLabel(ui.cursor);
+    } else if (ui.view === 'week' || ui.view === 'workweek') {
+      const w = weekDates(ui.cursor, ui.view === 'workweek' ? 5 : 7);
+      const last = w[w.length - 1];
+      const sameMonth = parse(w[0]).getMonth() === parse(last).getMonth();
+      const a = parse(w[0]).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      const b = parse(last).toLocaleDateString(undefined,
+        sameMonth ? { day: 'numeric' } : { month: 'short', day: 'numeric' });
+      el('periodTitle').textContent = `${a} – ${b}`;
+    } else {
+      el('periodTitle').textContent =
+        parse(ui.cursor).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    }
+
+    const projects = [...new Set(state.tasks.map((t) => t.project).filter(Boolean))].sort();
+    const sel = el('filterProject');
+    const keep = sel.value;
+    sel.textContent = '';
+    sel.append(new Option('All projects', ''));
+    projects.forEach((p) => sel.append(new Option(p, p)));
+    sel.value = projects.includes(keep) ? keep : '';
+    const dl = el('projectList');
+    dl.textContent = '';
+    projects.forEach((p) => dl.append(Object.assign(document.createElement('option'), { value: p })));
+
+    const people = [...new Set(state.tasks.map((t) => t.assignee).filter(Boolean))].sort();
+    const psel = el('filterPerson');
+    const keepPerson = psel.value;
+    psel.textContent = '';
+    psel.append(new Option('Everyone', ''));
+    people.forEach((p) => psel.append(new Option(p, p)));
+    if (state.tasks.some((t) => !t.assignee)) psel.append(new Option('Unassigned', '__none'));
+    psel.value = [...people, '__none'].includes(keepPerson) ? keepPerson : '';
+    const pdl = el('peopleList');
+    pdl.textContent = '';
+    people.forEach((p) => pdl.append(Object.assign(document.createElement('option'), { value: p })));
+
+    updateSummary();
+  }
+
+  function updateSummary() {
+    const open = state.tasks.filter((t) => t.status !== 'done');
+    const due = open.filter((t) => t.date === todayISO()).length;
+    const late = open.filter((t) => t.date < todayISO()).length;
+    const parts = [due ? `${due} left today` : 'nothing left today'];
+    if (late) parts.push(`${late} overdue`);
+    el('dueSummary').textContent = parts.join(' · ');
+  }
+
+  // ---- day view: status columns, each split into Project / Non-project -----
+  function renderDay() {
+    const f = filters();
+    const board = document.createElement('div');
+    board.className = 'board';
+
+    for (const status of STATUSES) {
+      const col = document.createElement('section');
+      col.className = 'column';
+      col.dataset.status = status.id;
+
+      const all = tasksOn(ui.cursor, f).filter((t) => t.status === status.id);
 
       const head = document.createElement('div');
       head.className = 'column-head';
       const dot = document.createElement('span');
       dot.className = 'dot';
-      dot.dataset.status = col.id;
-      head.append(dot, col.name);
+      dot.dataset.status = status.id;
+      head.append(dot, status.name);
       const count = document.createElement('span');
       count.className = 'count';
-      count.textContent = shown.length;
+      count.textContent = all.length;
       head.append(count);
-      section.append(head);
+      col.append(head);
+
+      const body = document.createElement('div');
+      body.className = 'column-body';
+
+      for (const section of SECTIONS) {
+        const group = document.createElement('div');
+        group.className = 'group';
+
+        const label = document.createElement('div');
+        label.className = 'group-head';
+        label.textContent = section.name;
+        const n = document.createElement('span');
+        n.className = 'group-count';
+        const items = all.filter((t) => t.section === section.id);
+        n.textContent = items.length;
+        label.append(n);
+        group.append(label);
+
+        const list = document.createElement('ul');
+        list.className = 'cards';
+        list.dataset.status = status.id;
+        list.dataset.section = section.id;
+        list.dataset.date = ui.cursor;
+        if (!items.length) list.classList.add('is-empty');
+        items.forEach((t) => list.append(card(t)));
+        dropTarget(list, { status: status.id, section: section.id, date: ui.cursor });
+        group.append(list);
+
+        if (status.id !== 'done') {
+          group.append(quickAdd({ status: status.id, section: section.id, date: ui.cursor }));
+        }
+        body.append(group);
+      }
+
+      col.append(body);
+      board.append(col);
+    }
+
+    view.append(dayToolbar(), board);
+  }
+
+  // Rollover control lives with the day it acts on.
+  function dayToolbar() {
+    const bar = document.createElement('div');
+    bar.className = 'daybar';
+
+    const left = document.createElement('div');
+    left.className = 'daybar-left';
+    const date = document.createElement('strong');
+    date.textContent = parse(ui.cursor).toLocaleDateString(undefined,
+      { weekday: 'long', month: 'long', day: 'numeric' });
+    left.append(date);
+    if (ui.cursor === todayISO()) {
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = 'Today';
+      left.append(tag);
+    }
+    bar.append(left);
+
+    const pending = unfinishedOn(ui.cursor).length;
+    const roll = document.createElement('button');
+    roll.className = 'ghost wide';
+    let nextDay = addDays(ui.cursor, 1);
+    if (ui.view === 'workweek') while (isWeekend(nextDay)) nextDay = addDays(nextDay, 1);
+    const when = nextDay === addDays(todayISO(), 1) ? 'tomorrow'
+      : parse(nextDay).toLocaleDateString(undefined, { weekday: 'long' });
+    roll.textContent = pending ? `Move ${pending} unfinished to ${when}` : 'Nothing to move';
+    roll.disabled = !pending;
+    roll.addEventListener('click', () => rollDay(ui.cursor));
+    bar.append(roll);
+    return bar;
+  }
+
+  // ---- week view: one column per day --------------------------------------
+  function renderWeek(dates) {
+    const f = filters();
+    const board = document.createElement('div');
+    board.className = 'board week';
+
+    for (const date of dates) {
+      const col = document.createElement('section');
+      col.className = 'column day-column';
+      if (date === todayISO()) col.classList.add('is-today');
+      if (['Sat', 'Sun'].includes(WEEKDAYS[(parse(date).getDay() + 6) % 7])) col.classList.add('weekend');
+
+      const head = document.createElement('div');
+      head.className = 'column-head day-head';
+      const name = document.createElement('span');
+      name.className = 'dow';
+      name.textContent = WEEKDAYS[(parse(date).getDay() + 6) % 7];
+      const num = document.createElement('span');
+      num.className = 'dnum';
+      num.textContent = parse(date).getDate();
+      num.title = 'Open this day';
+      num.addEventListener('click', () => { ui.view = 'day'; ui.cursor = date; render(); });
+      head.append(name, num);
+
+      const pending = unfinishedOn(date).length;
+      const roll = document.createElement('button');
+      roll.className = 'icon';
+      roll.textContent = '↦';
+      roll.title = pending ? `Move ${pending} unfinished to the next day` : 'Nothing to move';
+      roll.disabled = !pending;
+      roll.addEventListener('click', () => rollDay(date));
+      head.append(roll);
+      col.append(head);
+
+      const body = document.createElement('div');
+      body.className = 'column-body';
+
+      for (const section of SECTIONS) {
+        const group = document.createElement('div');
+        group.className = 'group';
+        const label = document.createElement('div');
+        label.className = 'group-head';
+        label.textContent = section.name;
+        group.append(label);
+
+        const list = document.createElement('ul');
+        list.className = 'cards';
+        group.dataset.section = section.id;
+        const items = tasksOn(date, f).filter((t) => t.section === section.id);
+        if (!items.length) list.classList.add('is-empty');
+        items.forEach((t) => list.append(card(t, true)));
+        dropTarget(list, { section: section.id, date });
+        group.append(list);
+        group.append(quickAdd({ section: section.id, date }, true));
+        body.append(group);
+      }
+      col.append(body);
+      board.append(col);
+    }
+    view.append(board);
+  }
+
+  // ---- month view: calendar grid ------------------------------------------
+  function renderMonth() {
+    const f = filters();
+    const wrap = document.createElement('div');
+    wrap.className = 'month';
+
+    const header = document.createElement('div');
+    header.className = 'month-head';
+    WEEKDAYS.forEach((d) => {
+      const c = document.createElement('div');
+      c.textContent = d;
+      header.append(c);
+    });
+    wrap.append(header);
+
+    const grid = document.createElement('div');
+    grid.className = 'month-grid';
+    const month = parse(ui.cursor).getMonth();
+
+    for (const date of monthGrid(ui.cursor)) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      if (parse(date).getMonth() !== month) cell.classList.add('outside');
+      if (date === todayISO()) cell.classList.add('is-today');
+
+      const head = document.createElement('div');
+      head.className = 'cell-head';
+      const num = document.createElement('button');
+      num.className = 'dnum';
+      num.textContent = parse(date).getDate();
+      num.title = 'Open this day';
+      num.addEventListener('click', () => { ui.view = 'day'; ui.cursor = date; render(); });
+      head.append(num);
+
+      const pending = unfinishedOn(date).length;
+      if (pending) {
+        const badge = document.createElement('span');
+        badge.className = 'count';
+        badge.textContent = pending;
+        head.append(badge);
+      }
+      cell.append(head);
 
       const list = document.createElement('ul');
-      list.className = 'cards';
-      if (!shown.length) {
-        const empty = document.createElement('li');
-        empty.className = 'empty';
-        empty.textContent = issues.length ? 'No matching issues' : 'No issues';
-        list.append(empty);
+      list.className = 'cards mini';
+      const items = tasksOn(date, f);
+      items.slice(0, 4).forEach((t) => list.append(miniCard(t)));
+      if (items.length > 4) {
+        const more = document.createElement('li');
+        more.className = 'more';
+        more.textContent = `+${items.length - 4} more`;
+        more.addEventListener('click', () => { ui.view = 'day'; ui.cursor = date; render(); });
+        list.append(more);
       }
-      shown.forEach((issue) => list.append(cardFor(issue)));
-      section.append(list);
+      dropTarget(cell, { date }, list);
+      cell.append(list);
 
-      section.append(quickAdd(col.id));
+      const add = document.createElement('button');
+      add.className = 'cell-add';
+      add.textContent = '+';
+      add.title = 'Add a task on this day';
+      add.addEventListener('click', () => openModal(null, { date }));
+      cell.append(add);
 
-      wireDrop(section, list);
-      board.append(section);
+      grid.append(cell);
     }
-
-    refreshAssignees();
-    updateDueSummary();
+    wrap.append(grid);
+    view.append(wrap);
   }
 
-  // Dated work floats to the top of a column, soonest first; undated keeps
-  // whatever order the user dragged it into.
-  function byDueThenOrder(a, b) {
-    const ad = a.due ? `${a.due}T${a.dueTime || '23:59'}` : null;
-    const bd = b.due ? `${b.due}T${b.dueTime || '23:59'}` : null;
-    if (ad && bd && ad !== bd) return ad < bd ? -1 : 1;
-    if (ad && !bd) return -1;
-    if (!ad && bd) return 1;
-    return a.order - b.order;
-  }
-
-  function cardFor(issue) {
+  // =========================================================================
+  // Cards
+  // =========================================================================
+  function card(task, compact) {
     const li = document.createElement('li');
     li.className = 'card';
+    if (task.status === 'done') li.classList.add('is-done');
+    if (compact) li.classList.add('compact');
     li.draggable = true;
-    li.dataset.id = issue.id;
+    li.dataset.id = task.id;
     li.tabIndex = 0;
 
-    const h3 = document.createElement('h3');
-    h3.textContent = issue.title;
-    li.append(h3);
+    const top = document.createElement('div');
+    top.className = 'card-top';
 
-    if (issue.labels && issue.labels.length) {
-      const wrap = document.createElement('div');
-      wrap.className = 'labels';
-      issue.labels.forEach((l) => {
-        const s = document.createElement('span');
-        s.className = 'label';
-        s.textContent = l;
-        wrap.append(s);
-      });
-      li.append(wrap);
+    const box = document.createElement('button');
+    box.className = 'check';
+    box.setAttribute('aria-label', task.status === 'done' ? 'Mark as not done' : 'Mark as done');
+    box.setAttribute('aria-pressed', String(task.status === 'done'));
+    box.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setStatus(task, task.status === 'done' ? 'todo' : 'done');
+      render();
+    });
+    top.append(box);
+
+    const title = document.createElement('span');
+    title.className = 'title';
+    title.textContent = task.title;
+    top.append(title);
+    li.append(top);
+
+    const meta = document.createElement('div');
+    meta.className = 'card-foot';
+    let hasMeta = false;
+
+    if (task.time) {
+      hasMeta = true;
+      const t = document.createElement('span');
+      t.className = 'time';
+      const late = task.status !== 'done' && task.date < todayISO();
+      if (late) t.dataset.state = 'overdue';
+      t.textContent = fmtTime(task.time);
+      meta.append(t);
     }
-
-    const foot = document.createElement('div');
-    foot.className = 'card-foot';
-
-    const type = document.createElement('span');
-    type.className = 'chip';
-    type.dataset.type = issue.type;
-    type.textContent = TYPE_LABEL[issue.type] || issue.type;
-    foot.append(type);
-
-    foot.append(priorityMark(issue.priority));
-
-    if (issue.due) {
-      const due = document.createElement('span');
-      due.className = 'due';
-      due.dataset.state = dueState(issue);
-      due.textContent = dueText(issue);
-      due.title = `Due ${issue.due}${issue.dueTime ? ` at ${fmtTime(issue.dueTime)}` : ''}`;
-      foot.append(due);
-    }
-
-    const key = document.createElement('span');
-    key.className = 'key';
-    key.textContent = issue.key;
-    foot.append(key);
-    foot.append(Object.assign(document.createElement('span'), { className: 'spacer' }));
-    if (issue.points != null && issue.points !== '') {
+    if (task.section === 'project' && task.project && !compact) {
+      hasMeta = true;
       const p = document.createElement('span');
-      p.className = 'pts';
-      p.textContent = issue.points;
-      foot.append(p);
+      p.className = 'chip';
+      p.textContent = task.project;
+      meta.append(p);
     }
-    if (issue.assignee) {
-      const a = document.createElement('span');
-      a.className = 'avatar';
-      a.title = issue.assignee;
-      a.style.setProperty('--hue', hueFor(issue.assignee));
-      a.textContent = initials(issue.assignee);
-      foot.append(a);
+    if (task.rolledFrom) {
+      hasMeta = true;
+      const r = document.createElement('span');
+      r.className = 'rolled';
+      r.textContent = '↦';
+      r.title = `Moved from ${task.rolledFrom}`;
+      meta.append(r);
     }
-    li.append(foot);
+    if (task.priority === 'high') {
+      hasMeta = true;
+      meta.append(priorityMark(task.priority));
+    }
+    meta.append(Object.assign(document.createElement('span'), { className: 'spacer' }));
 
-    li.addEventListener('click', () => openModal(issue.id));
+    if (task.assignee) {
+      hasMeta = true;
+      meta.append(avatar(task.assignee));
+    }
+
+    if (task.subtasks.length) {
+      hasMeta = true;
+      const done = task.subtasks.filter((s) => s.done).length;
+      const toggle = document.createElement('button');
+      toggle.className = 'sub-toggle';
+      toggle.setAttribute('aria-expanded', String(!task.collapsed));
+      toggle.textContent = `${done}/${task.subtasks.length}`;
+      toggle.title = task.collapsed ? 'Show subtasks' : 'Hide subtasks';
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        task.collapsed = !task.collapsed;
+        save();
+        render();
+      });
+      meta.append(toggle);
+    }
+    if (hasMeta) li.append(meta);
+
+    if (task.subtasks.length && !task.collapsed) li.append(subList(task));
+
+    li.addEventListener('click', () => openModal(task.id));
     li.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') openModal(issue.id);
+      if (e.key === 'Enter') openModal(task.id);
+      if (e.key === ' ') {
+        e.preventDefault();
+        setStatus(task, task.status === 'done' ? 'todo' : 'done');
+        render();
+      }
     });
     li.addEventListener('dragstart', (e) => {
-      e.dataTransfer.setData('text/plain', issue.id);
+      e.dataTransfer.setData('text/plain', task.id);
       e.dataTransfer.effectAllowed = 'move';
       li.classList.add('dragging');
     });
@@ -269,19 +646,184 @@
     return li;
   }
 
-  // Inline capture: type a title, press Enter, keep typing. Faster than the
-  // full dialog when you are just filling in the day.
-  function quickAdd(status) {
+  function subList(task) {
+    const ul = document.createElement('ul');
+    ul.className = 'subs';
+    task.subtasks.forEach((sub) => {
+      const li = document.createElement('li');
+      const box = document.createElement('button');
+      box.className = 'check small';
+      box.setAttribute('aria-pressed', String(sub.done));
+      box.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sub.done = !sub.done;
+        // All subtasks ticked promotes the parent out of To Do.
+        if (task.subtasks.every((s) => s.done) && task.status === 'todo') task.status = 'doing';
+        save();
+        render();
+      });
+      const span = document.createElement('span');
+      span.className = 'sub-title';
+      span.textContent = sub.title;
+      if (sub.done) span.classList.add('struck');
+      li.append(box, span);
+      ul.append(li);
+    });
+    return ul;
+  }
+
+  function miniCard(task) {
+    const li = document.createElement('li');
+    li.className = 'mini-card';
+    li.dataset.id = task.id;
+    li.draggable = true;
+    if (task.status === 'done') li.classList.add('is-done');
+    li.dataset.section = task.section;
+    li.append(Object.assign(document.createElement('span'), { textContent: task.title }));
+    if (task.subtasks.length) {
+      const done = task.subtasks.filter((x) => x.done).length;
+      const badge = document.createElement('span');
+      badge.className = 'mini-subs';
+      badge.textContent = `${done}/${task.subtasks.length}`;
+      li.append(badge);
+    }
+    li.title = task.subtasks.length
+      ? `${task.title}\n· ${task.subtasks.map((x) => `${x.done ? '✓' : '○'} ${x.title}`).join('\n· ')}`
+      : task.title;
+    li.addEventListener('click', (e) => { e.stopPropagation(); openModal(task.id); });
+    li.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', task.id);
+      li.classList.add('dragging');
+    });
+    li.addEventListener('dragend', () => li.classList.remove('dragging'));
+    return li;
+  }
+
+  // Initials in a ring — monochrome, so it reads as an owner without colour.
+  function avatar(name) {
+    const span = document.createElement('span');
+    span.className = 'avatar';
+    span.title = name;
+    span.textContent = name.trim().split(/\s+/).slice(0, 2)
+      .map((w) => w[0].toUpperCase()).join('');
+    return span;
+  }
+
+  function priorityMark(priority) {
+    const wrap = document.createElement('span');
+    wrap.className = 'prio';
+    wrap.dataset.priority = priority;
+    wrap.title = `${priority} priority`;
+    const filled = PRIORITY_BARS[priority] ?? 2;
+    for (let i = 1; i <= 3; i += 1) {
+      const bar = document.createElement('i');
+      if (i <= filled) bar.className = 'on';
+      wrap.append(bar);
+    }
+    return wrap;
+  }
+
+  // =========================================================================
+  // Drag and drop. A drop applies whichever fields the zone declares, so the
+  // same handler moves a task between statuses, sections, and days.
+  // =========================================================================
+  function dropTarget(zone, patch, listForOrder) {
+    const list = listForOrder || zone;
+    zone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      zone.classList.add('over');
+    });
+    zone.addEventListener('dragleave', (e) => {
+      if (!zone.contains(e.relatedTarget)) zone.classList.remove('over');
+    });
+    zone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      zone.classList.remove('over');
+      const task = byId(e.dataTransfer.getData('text/plain'));
+      if (!task) return;
+      if (patch.status && patch.status !== task.status) setStatus(task, patch.status);
+      if (patch.section) task.section = patch.section;
+      if (patch.date) task.date = patch.date;
+      task.order = orderAt(list, e.clientY, task.id);
+      save();
+      render();
+    });
+  }
+
+  function orderAt(list, y, draggedId) {
+    const peers = [...list.querySelectorAll('.card,.mini-card')]
+      .filter((c) => c.dataset.id !== draggedId)
+      .map((c) => byId(c.dataset.id))
+      .filter(Boolean);
+    let before = null;
+    let after = null;
+    for (const peer of peers) {
+      const node = list.querySelector(`[data-id="${peer.id}"]`);
+      const box = node.getBoundingClientRect();
+      if (y > box.top + box.height / 2) before = peer;
+      else { after = peer; break; }
+    }
+    if (!before && !after) return 0;
+    if (!before) return after.order - 1;
+    if (!after) return before.order + 1;
+    return (before.order + after.order) / 2;
+  }
+
+  // =========================================================================
+  // Rolling unfinished work forward
+  // =========================================================================
+  const isWeekend = (isoStr) => [0, 6].includes(parse(isoStr).getDay());
+
+  function rollDay(date) {
+    const pending = unfinishedOn(date);
+    if (!pending.length) return;
+    // In the work-week view, Friday's leftovers belong on Monday.
+    let target = addDays(date, 1);
+    if (ui.view === 'workweek') {
+      while (isWeekend(target)) target = addDays(target, 1);
+    }
+    pending.forEach((t) => {
+      t.date = target;
+      t.rolledFrom = date;
+      t.updatedAt = Date.now();
+    });
+    save();
+    // Follow the work when looking at a single day.
+    if (ui.view === 'day' && ui.cursor === date) ui.cursor = target;
+    render();
+  }
+
+  function rollOverdue() {
+    const stale = state.tasks.filter((t) => t.status !== 'done' && t.date < todayISO());
+    if (!stale.length) {
+      alert('Nothing overdue.');
+      return;
+    }
+    if (!confirm(`Move ${stale.length} unfinished task${stale.length > 1 ? 's' : ''} to today?`)) return;
+    stale.forEach((t) => {
+      t.rolledFrom = t.date;
+      t.date = todayISO();
+    });
+    save();
+    render();
+  }
+
+  // =========================================================================
+  // Quick add
+  // =========================================================================
+  function quickAdd(patch, compact) {
     const wrap = document.createElement('div');
     wrap.className = 'quick';
 
     const btn = document.createElement('button');
     btn.className = 'add-card';
-    btn.textContent = '+ Add task';
+    btn.textContent = compact ? '+' : '+ Add task';
 
     const input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Task title, then Enter';
+    input.placeholder = 'Task, then Enter';
     input.hidden = true;
 
     btn.addEventListener('click', () => {
@@ -294,12 +836,10 @@
       if (e.key !== 'Enter') return;
       const title = input.value.trim();
       if (!title) return;
-      createIssue({ title, status, due: todayISO() });
+      createTask(Object.assign({ title }, patch));
       input.value = '';
-      // Re-render replaces this node, so reopen the input in the new column.
       render();
-      const fresh = board.querySelector(`.column[data-status="${status}"] .quick input`);
-      if (fresh) { fresh.previousElementSibling.hidden = true; fresh.hidden = false; fresh.focus(); }
+      reopenQuickAdd(patch);
     });
     input.addEventListener('blur', () => {
       if (input.value.trim()) return;
@@ -311,124 +851,59 @@
     return wrap;
   }
 
-  function createIssue(data) {
-    const inCol = state.issues.filter((i) => i.status === data.status);
-    const order = inCol.length ? Math.max(...inCol.map((i) => i.order)) + 1 : 0;
-    state.issues.push(Object.assign({
-      id: crypto.randomUUID(),
-      key: nextKey(),
-      description: '',
-      type: 'task',
-      priority: 'medium',
-      points: null,
-      assignee: '',
-      labels: [],
-      due: null,
-      dueTime: null,
-      order,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    }, data));
-    save();
-  }
-
-  // Signal-strength style priority indicator: filled bars up to the level.
-  function priorityMark(priority) {
-    const wrap = document.createElement('span');
-    wrap.className = 'prio';
-    wrap.dataset.priority = priority;
-    wrap.title = `${PRIORITY_LABEL[priority] || priority} priority`;
-    const filled = PRIORITY_BARS[priority] ?? 2;
-    for (let i = 1; i <= 3; i += 1) {
-      const bar = document.createElement('i');
-      if (i <= filled) bar.className = 'on';
-      wrap.append(bar);
-    }
-    return wrap;
-  }
-
-  // Stable per-person accent so the same name always gets the same avatar colour.
-  function hueFor(name) {
-    let h = 0;
-    for (const ch of name) h = (h * 31 + ch.codePointAt(0)) % 360;
-    return h;
-  }
-
-  // ---- drag & drop --------------------------------------------------------
-  function wireDrop(section, list) {
-    section.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      section.classList.add('over');
+  // Re-render replaces the node, so find the equivalent input and refocus it.
+  function reopenQuickAdd(patch) {
+    const groups = [...view.querySelectorAll('.group')];
+    const target = groups.find((g) => {
+      const list = g.querySelector('.cards');
+      if (!list) return false;
+      return (!patch.date || list.dataset.date === patch.date || !list.dataset.date)
+        && (!patch.section || list.dataset.section === patch.section || !list.dataset.section);
     });
-    section.addEventListener('dragleave', (e) => {
-      if (!section.contains(e.relatedTarget)) section.classList.remove('over');
-    });
-    section.addEventListener('drop', (e) => {
-      e.preventDefault();
-      section.classList.remove('over');
-      const id = e.dataTransfer.getData('text/plain');
-      const issue = state.issues.find((i) => i.id === id);
-      if (!issue) return;
-      issue.status = section.dataset.status;
-      issue.order = orderAt(list, e.clientY, id);
-      issue.updatedAt = Date.now();
-      save();
-      render();
-    });
+    const input = target && target.querySelector('.quick input');
+    if (!input) return;
+    input.previousElementSibling.hidden = true;
+    input.hidden = false;
+    input.focus();
   }
 
-  // Compute a fractional order between the neighbours at the drop point.
-  function orderAt(list, y, draggedId) {
-    const siblings = [...list.querySelectorAll('.card')]
-      .filter((c) => c.dataset.id !== draggedId)
-      .map((c) => ({ el: c, issue: state.issues.find((i) => i.id === c.dataset.id) }))
-      .filter((s) => s.issue);
-    let before = null;
-    let after = null;
-    for (const s of siblings) {
-      const box = s.el.getBoundingClientRect();
-      if (y > box.top + box.height / 2) before = s.issue;
-      else { after = s.issue; break; }
-    }
-    if (!before && !after) return 0;
-    if (!before) return after.order - 1;
-    if (!after) return before.order + 1;
-    return (before.order + after.order) / 2;
-  }
-
-  // ---- modal --------------------------------------------------------------
+  // =========================================================================
+  // Modal
+  // =========================================================================
   const modal = el('modal');
-  const form = el('issueForm');
-  // form.title / form.status collide with HTMLFormElement's own DOM properties,
-  // so always reach fields through form.elements.
+  const form = el('taskForm');
   const field = (name) => form.elements.namedItem(name);
   let editingId = null;
+  let draftSubs = [];
 
-  el('statusSelect').append(...COLUMNS.map((c) => new Option(c.name, c.id)));
+  el('statusSelect').append(...STATUSES.map((s) => new Option(s.name, s.id)));
 
-  function openModal(id, presetStatus) {
+  function openModal(id, preset = {}) {
     editingId = id || null;
-    const issue = id ? state.issues.find((i) => i.id === id) : null;
-    el('modalTitle').textContent = issue ? `Edit ${issue.key}` : 'Create issue';
-    el('deleteBtn').hidden = !issue;
+    const task = id ? byId(id) : null;
+    el('modalTitle').textContent = task ? `Edit ${task.key}` : 'New task';
+    el('deleteBtn').hidden = !task;
     form.reset();
-    if (issue) {
-      field('title').value = issue.title;
-      field('description').value = issue.description || '';
-      field('type').value = issue.type;
-      field('priority').value = issue.priority;
-      field('status').value = issue.status;
-      field('points').value = issue.points ?? '';
-      field('assignee').value = issue.assignee || '';
-      field('labels').value = (issue.labels || []).join(', ');
-      field('due').value = issue.due || '';
-      field('dueTime').value = issue.dueTime || '';
+
+    if (task) {
+      field('title').value = task.title;
+      field('notes').value = task.notes || '';
+      field('section').value = task.section;
+      field('project').value = task.project || '';
+      field('assignee').value = task.assignee || '';
+      field('date').value = task.date;
+      field('time').value = task.time || '';
+      field('status').value = task.status;
+      field('priority').value = task.priority;
+      draftSubs = task.subtasks.map((s) => ({ ...s }));
     } else {
-      field('status').value = presetStatus || COLUMNS[0].id;
-      // A daily list is mostly "today", so default new work to today.
-      field('due').value = todayISO();
+      field('section').value = preset.section || 'project';
+      field('date').value = preset.date || ui.cursor;
+      field('status').value = preset.status || 'todo';
+      draftSubs = [];
     }
+    renderSubs();
+    toggleProjectField();
     modal.hidden = false;
     field('title').focus();
   }
@@ -436,29 +911,84 @@
   function closeModal() {
     modal.hidden = true;
     editingId = null;
+    draftSubs = [];
   }
+
+  // The project name only makes sense on project work.
+  function toggleProjectField() {
+    const isProject = field('section').value === 'project';
+    field('project').disabled = !isProject;
+    field('project').closest('label').classList.toggle('disabled', !isProject);
+  }
+  field('section').addEventListener('change', toggleProjectField);
+
+  function renderSubs() {
+    const list = el('subList');
+    list.textContent = '';
+    draftSubs.forEach((sub, i) => {
+      const li = document.createElement('li');
+      const box = document.createElement('button');
+      box.type = 'button';
+      box.className = 'check small';
+      box.setAttribute('aria-pressed', String(sub.done));
+      box.addEventListener('click', () => { sub.done = !sub.done; renderSubs(); });
+
+      const text = document.createElement('input');
+      text.type = 'text';
+      text.value = sub.title;
+      text.className = 'sub-text';
+      if (sub.done) text.classList.add('struck');
+      text.addEventListener('input', () => { sub.title = text.value; });
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'icon';
+      del.textContent = '✕';
+      del.title = 'Remove subtask';
+      del.addEventListener('click', () => { draftSubs.splice(i, 1); renderSubs(); });
+
+      li.append(box, text, del);
+      list.append(li);
+    });
+    const done = draftSubs.filter((s) => s.done).length;
+    el('subCount').textContent = draftSubs.length ? `${done}/${draftSubs.length}` : '';
+  }
+
+  el('subInput').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const title = e.target.value.trim();
+    if (!title) return;
+    draftSubs.push({ id: crypto.randomUUID(), title, done: false });
+    e.target.value = '';
+    renderSubs();
+  });
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
+    const section = field('section').value;
     const data = {
       title: field('title').value.trim(),
-      description: field('description').value.trim(),
-      type: field('type').value,
-      priority: field('priority').value,
-      status: field('status').value,
-      points: field('points').value === '' ? null : Number(field('points').value),
+      notes: field('notes').value.trim(),
+      section,
+      project: section === 'project' ? field('project').value.trim() : '',
       assignee: field('assignee').value.trim(),
-      labels: field('labels').value.split(',').map((v) => v.trim()).filter(Boolean),
-      due: field('due').value || null,
-      dueTime: field('dueTime').value || null,
+      date: field('date').value || todayISO(),
+      time: field('time').value || null,
+      status: field('status').value,
+      priority: field('priority').value,
+      subtasks: draftSubs.filter((s) => s.title.trim()),
     };
     if (!data.title) return;
 
     if (editingId) {
-      const issue = state.issues.find((i) => i.id === editingId);
-      Object.assign(issue, data, { updatedAt: Date.now() });
+      const task = byId(editingId);
+      const wasDone = task.status === 'done';
+      Object.assign(task, data, { updatedAt: Date.now() });
+      if (data.status === 'done' && !wasDone) task.completedAt = Date.now();
+      if (data.status !== 'done') task.completedAt = null;
     } else {
-      createIssue(data);
+      createTask(data);
     }
     save();
     closeModal();
@@ -466,9 +996,9 @@
   });
 
   el('deleteBtn').addEventListener('click', () => {
-    const issue = state.issues.find((i) => i.id === editingId);
-    if (!issue || !confirm(`Delete ${issue.key}? This cannot be undone.`)) return;
-    state.issues = state.issues.filter((i) => i.id !== editingId);
+    const task = byId(editingId);
+    if (!task || !confirm(`Delete "${task.title}"?`)) return;
+    state.tasks = state.tasks.filter((t) => t.id !== editingId);
     save();
     closeModal();
     render();
@@ -477,51 +1007,39 @@
   el('cancelBtn').addEventListener('click', closeModal);
   el('modalClose').addEventListener('click', closeModal);
   modal.addEventListener('mousedown', (e) => { if (e.target === modal) closeModal(); });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !modal.hidden) closeModal();
-    if (e.key === 'c' && modal.hidden && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
-      e.preventDefault();
-      openModal(null);
-    }
-  });
 
-  // ---- toolbar ------------------------------------------------------------
-  el('newIssueBtn').addEventListener('click', () => openModal(null));
-
-  const todayBtn = el('todayBtn');
-  todayBtn.addEventListener('click', () => {
-    const on = todayBtn.getAttribute('aria-pressed') === 'true';
-    todayBtn.setAttribute('aria-pressed', String(!on));
+  // =========================================================================
+  // Chrome: view switching, navigation, filters, menu
+  // =========================================================================
+  function setView(name) {
+    ui.view = name;
+    state.view = name;
+    save();
     render();
+  }
+
+  document.querySelectorAll('.segmented button').forEach((b) => {
+    b.addEventListener('click', () => setView(b.dataset.view));
   });
 
-  // ---- header clock -------------------------------------------------------
-  let lastDay = todayISO();
-  function tick() {
-    const now = new Date();
-    el('todayLabel').textContent =
-      now.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
-    el('clock').textContent =
-      now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-    // Crossing midnight, or a due time passing, changes what is overdue.
-    if (todayISO() !== lastDay) { lastDay = todayISO(); render(); }
-    else updateDueSummary();
-  }
+  const step = (n) => {
+    if (ui.view === 'day') ui.cursor = addDays(ui.cursor, n);
+    else if (ui.view === 'month') ui.cursor = addMonths(ui.cursor, n);
+    else ui.cursor = addDays(ui.cursor, n * 7);
+    render();
+  };
+  el('prevBtn').addEventListener('click', () => step(-1));
+  el('nextBtn').addEventListener('click', () => step(1));
+  el('todayBtn').addEventListener('click', () => { ui.cursor = todayISO(); render(); });
 
-  function updateDueSummary() {
-    const open = state.issues.filter((i) => i.status !== 'done');
-    const due = open.filter((i) => dueState(i) === 'today').length;
-    const late = open.filter((i) => dueState(i) === 'overdue').length;
-    const parts = [];
-    parts.push(due ? `${due} due today` : 'nothing due today');
-    if (late) parts.push(`${late} overdue`);
-    el('dueSummary').textContent = parts.join(' · ');
-  }
-
-  tick();
-  setInterval(tick, 20000);
-  ['search', 'filterAssignee', 'filterType', 'filterPriority'].forEach((id) => {
+  el('newTaskBtn').addEventListener('click', () => openModal(null, { date: ui.cursor }));
+  ['search', 'filterSection', 'filterProject', 'filterPerson'].forEach((id) => {
     el(id).addEventListener('input', render);
+  });
+  el('hideDoneBtn').addEventListener('click', (e) => {
+    const on = e.currentTarget.getAttribute('aria-pressed') === 'true';
+    e.currentTarget.setAttribute('aria-pressed', String(!on));
+    render();
   });
 
   const menuList = el('menuList');
@@ -531,25 +1049,27 @@
   });
   document.addEventListener('click', () => { menuList.hidden = true; });
 
-  function refreshAssignees() {
-    const names = [...new Set(state.issues.map((i) => i.assignee).filter(Boolean))].sort();
-    const sel = el('filterAssignee');
-    const current = sel.value;
-    sel.textContent = '';
-    sel.append(new Option('All assignees', ''));
-    names.forEach((n) => sel.append(new Option(n, n)));
-    sel.value = names.includes(current) ? current : '';
-    const dl = el('assigneeList');
-    dl.textContent = '';
-    names.forEach((n) => dl.append(Object.assign(document.createElement('option'), { value: n })));
-    el('projectName').textContent = state.projectName;
-  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modal.hidden) { closeModal(); return; }
+    if (!modal.hidden) return;
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+    if (typing) return;
+    if (e.key === 'n') { e.preventDefault(); openModal(null, { date: ui.cursor }); }
+    if (e.key === 'ArrowLeft') step(-1);
+    if (e.key === 'ArrowRight') step(1);
+    if (e.key === 't') { ui.cursor = todayISO(); render(); }
+    if (['1', '2', '3', '4'].includes(e.key)) {
+      setView({ 1: 'day', 2: 'workweek', 3: 'week', 4: 'month' }[e.key]);
+    }
+  });
+
+  el('rollOverdueBtn').addEventListener('click', rollOverdue);
 
   el('exportBtn').addEventListener('click', () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${state.projectKey}-board.json`;
+    a.download = 'todo-board.json';
     a.click();
     URL.revokeObjectURL(a.href);
   });
@@ -560,9 +1080,12 @@
     if (!file) return;
     try {
       const parsed = JSON.parse(await file.text());
-      if (!parsed || !Array.isArray(parsed.issues)) throw new Error('missing issues array');
-      if (!confirm('Replace the current board with the imported file?')) return;
-      state = Object.assign(blank(), parsed);
+      const tasks = parsed.tasks || parsed.issues;
+      if (!Array.isArray(tasks)) throw new Error('no tasks in that file');
+      if (!confirm('Replace everything with the imported file?')) return;
+      state = parsed.tasks
+        ? Object.assign(blank(), parsed, { tasks: parsed.tasks.map(normalise) })
+        : migrate(parsed);
       save();
       render();
     } catch (err) {
@@ -573,39 +1096,55 @@
   });
 
   el('resetBtn').addEventListener('click', () => {
-    if (!confirm('Clear all issues from this board?')) return;
+    if (!confirm('Delete every task? This cannot be undone.')) return;
     state = blank();
     save();
     render();
   });
 
   el('seedBtn').addEventListener('click', () => {
-    if (state.issues.length && !confirm('Replace the current board with sample data?')) return;
+    if (state.tasks.length && !confirm('Replace everything with sample data?')) return;
     state = blank();
-    const shift = (days) => {
-      const d = new Date(); d.setDate(d.getDate() + days); return localISO(d);
-    };
+    const d = (n) => addDays(todayISO(), n);
     const samples = [
-      ['Morning standup notes', 'task', 'medium', 'done', 'Kevin Jusak', 1, [], shift(0), '09:30'],
-      ['Set up GitHub Pages deployment', 'task', 'high', 'done', 'Kevin Jusak', 3, ['infra'], shift(-1), null],
-      ['Draft Q4 planning doc', 'story', 'highest', 'inprogress', 'Kevin Jusak', 8, ['writing'], shift(0), '17:00'],
-      ['Review pull requests', 'task', 'high', 'inprogress', 'Kevin Jusak', 2, ['code'], shift(0), '15:00'],
-      ['Cards lose order after refresh', 'bug', 'high', 'review', 'Alex Kim', 2, ['bug'], shift(-2), null],
-      ['Reply to vendor email', 'task', 'medium', 'todo', '', 1, ['admin'], shift(0), '12:00'],
-      ['Book dentist appointment', 'task', 'low', 'todo', '', 1, ['personal'], shift(1), null],
-      ['Add sprint burndown chart', 'epic', 'low', 'todo', '', 13, ['reporting'], shift(6), null],
-      ['Weekly review', 'task', 'medium', 'todo', 'Kevin Jusak', 2, [], shift(3), '16:00'],
+      ['Draft Q4 planning doc', 'project', 'Roadmap', 'Kevin Jusak', d(0), '10:00', 'high', 'doing',
+        ['Outline sections', 'Pull last quarter numbers', 'Share for review']],
+      ['Review pull requests', 'project', 'Board App', 'Kevin Jusak', d(0), '15:00', 'high', 'todo', []],
+      ['Fix drag-and-drop bug', 'project', 'Board App', 'Alex Kim', d(0), null, 'medium', 'todo',
+        ['Reproduce', 'Write fix']],
+      ['Standup', 'project', 'Roadmap', 'Kevin Jusak', d(0), '09:30', 'medium', 'done', []],
+      ['Book dentist', 'personal', '', '', d(0), null, 'low', 'todo', []],
+      ['Groceries', 'personal', '', '', d(0), '18:30', 'medium', 'todo',
+        ['Coffee', 'Oat milk', 'Rice']],
+      ['Deploy to Pages', 'project', 'Board App', 'Sam Rivera', d(1), null, 'high', 'todo', []],
+      ['Gym', 'personal', '', '', d(1), '07:00', 'medium', 'todo', []],
+      ['Team retro', 'project', 'Roadmap', 'Alex Kim', d(2), '14:00', 'medium', 'todo', []],
+      ['Call mum', 'personal', '', '', d(3), null, 'medium', 'todo', []],
+      ['Renew insurance', 'personal', '', '', d(-1), null, 'high', 'todo', []],
+      ['Monthly report', 'project', 'Roadmap', 'Sam Rivera', d(9), null, 'medium', 'todo', []],
     ];
-    samples.forEach(([title, type, priority, status, assignee, points, labels, due, dueTime], idx) => {
-      state.issues.push({
-        id: crypto.randomUUID(), key: nextKey(), title, description: '',
-        type, priority, status, assignee, points, labels, due, dueTime,
-        order: idx, createdAt: Date.now(), updatedAt: Date.now(),
+    samples.forEach(([title, section, project, assignee, date, time, priority, status, subs], i) => {
+      createTask({
+        title, section, project, assignee, date, time, priority, status, order: i,
+        subtasks: subs.map((s) => ({ id: crypto.randomUUID(), title: s, done: status === 'done' })),
       });
     });
     save();
     render();
   });
+
+  // ---- clock --------------------------------------------------------------
+  let lastDay = todayISO();
+  function tick() {
+    const now = new Date();
+    el('todayLabel').textContent =
+      now.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+    el('clock').textContent = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    if (todayISO() !== lastDay) { lastDay = todayISO(); render(); }
+    else updateSummary();
+  }
+  tick();
+  setInterval(tick, 20000);
 
   render();
 })();

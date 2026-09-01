@@ -3,110 +3,119 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jira Board</title>
+<title>To-Do Board</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <header class="topbar">
   <div class="brand">
-    <div>
-      <h1 id="projectName">My Project</h1>
-      <div class="crumb"><span id="todayLabel"></span> · <span id="clock"></span> · <span id="dueSummary"></span></div>
+    <h1 id="periodTitle">Today</h1>
+    <div class="crumb">
+      <span id="todayLabel"></span> · <span id="clock"></span> · <span id="dueSummary"></span>
     </div>
   </div>
+
   <div class="controls">
-    <input id="search" type="search" placeholder="Search issues…" autocomplete="off">
-    <select id="filterAssignee"><option value="">All assignees</option></select>
-    <select id="filterType">
-      <option value="">All types</option>
-      <option value="story">Story</option>
-      <option value="task">Task</option>
-      <option value="bug">Bug</option>
-      <option value="epic">Epic</option>
+    <div class="segmented" role="tablist" aria-label="View">
+      <button data-view="day" role="tab">Day</button>
+      <button data-view="workweek" role="tab" title="Monday to Friday">Work</button>
+      <button data-view="week" role="tab">Week</button>
+      <button data-view="month" role="tab">Month</button>
+    </div>
+    <div class="nav">
+      <button id="prevBtn" class="ghost" title="Previous">‹</button>
+      <button id="todayBtn" class="ghost wide">Today</button>
+      <button id="nextBtn" class="ghost" title="Next">›</button>
+    </div>
+    <input id="search" type="search" placeholder="Search tasks…" autocomplete="off">
+    <select id="filterSection">
+      <option value="">All sections</option>
+      <option value="project">Project</option>
+      <option value="personal">Non-project</option>
     </select>
-    <button id="todayBtn" class="ghost wide" aria-pressed="false">Due today</button>
-    <select id="filterPriority">
-      <option value="">All priorities</option>
-      <option value="highest">Highest</option>
-      <option value="high">High</option>
-      <option value="medium">Medium</option>
-      <option value="low">Low</option>
-      <option value="lowest">Lowest</option>
-    </select>
-    <button id="newIssueBtn" class="primary">+ Create</button>
+    <select id="filterProject"><option value="">All projects</option></select>
+    <select id="filterPerson"><option value="">Everyone</option></select>
+    <button id="hideDoneBtn" class="ghost wide" aria-pressed="false">Hide done</button>
+    <button id="newTaskBtn" class="primary">+ Add task</button>
     <div class="menu">
       <button id="menuBtn" class="ghost" aria-haspopup="true">⋯</button>
       <div id="menuList" class="menu-list" hidden>
+        <button id="rollOverdueBtn">Pull overdue into today</button>
         <button id="exportBtn">Export JSON</button>
         <button id="importBtn">Import JSON</button>
         <button id="seedBtn">Load sample data</button>
-        <button id="resetBtn" class="danger">Clear board</button>
+        <button id="resetBtn" class="danger">Clear everything</button>
       </div>
     </div>
   </div>
 </header>
 
-<main id="board" class="board"></main>
+<main id="view" class="view"></main>
 
 <input type="file" id="importFile" accept="application/json" hidden>
 
 <div id="modal" class="modal" hidden>
-  <div class="modal-card" role="dialog" aria-modal="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
     <div class="modal-head">
-      <h2 id="modalTitle">Create issue</h2>
+      <h2 id="modalTitle">New task</h2>
       <button id="modalClose" class="ghost">✕</button>
     </div>
-    <form id="issueForm">
-      <label>Summary
-        <input name="title" required maxlength="200" placeholder="What needs to be done?">
+    <form id="taskForm">
+      <label>Task
+        <input name="title" required maxlength="200" placeholder="What needs doing?">
       </label>
-      <label>Description
-        <textarea name="description" rows="4" placeholder="Add more detail…"></textarea>
+      <label>Notes
+        <textarea name="notes" rows="3" placeholder="Any detail…"></textarea>
       </label>
+
       <div class="row">
-        <label>Type
-          <select name="type">
-            <option value="story">Story</option>
-            <option value="task">Task</option>
-            <option value="bug">Bug</option>
-            <option value="epic">Epic</option>
+        <label>Section
+          <select name="section">
+            <option value="project">Project</option>
+            <option value="personal">Non-project</option>
           </select>
+        </label>
+        <label>Project
+          <input name="project" list="projectList" placeholder="Which project?">
+          <datalist id="projectList"></datalist>
+        </label>
+      </div>
+
+      <div class="row">
+        <label>Assigned to
+          <input name="assignee" list="peopleList" placeholder="Unassigned">
+          <datalist id="peopleList"></datalist>
         </label>
         <label>Priority
           <select name="priority">
-            <option value="highest">Highest</option>
             <option value="high">High</option>
             <option value="medium" selected>Medium</option>
             <option value="low">Low</option>
-            <option value="lowest">Lowest</option>
           </select>
         </label>
       </div>
+
       <div class="row">
+        <label>Date
+          <input name="date" type="date" required>
+        </label>
+        <label>Time
+          <input name="time" type="time">
+        </label>
         <label>Status
           <select name="status" id="statusSelect"></select>
         </label>
-        <label>Story points
-          <input name="points" type="number" min="0" max="100" step="1" placeholder="—">
-        </label>
       </div>
-      <div class="row">
-        <label>Due date
-          <input name="due" type="date">
-        </label>
-        <label>Due time
-          <input name="dueTime" type="time">
-        </label>
+
+      <div class="subtasks-field">
+        <div class="sf-head">
+          <span>Subtasks</span>
+          <span id="subCount" class="sf-count"></span>
+        </div>
+        <ul id="subList" class="sf-list"></ul>
+        <input id="subInput" type="text" placeholder="Add a subtask, then Enter">
       </div>
-      <div class="row">
-        <label>Assignee
-          <input name="assignee" list="assigneeList" placeholder="Unassigned">
-          <datalist id="assigneeList"></datalist>
-        </label>
-        <label>Labels (comma separated)
-          <input name="labels" placeholder="frontend, urgent">
-        </label>
-      </div>
+
       <div class="modal-foot">
         <button type="button" id="deleteBtn" class="danger" hidden>Delete</button>
         <span class="spacer"></span>
