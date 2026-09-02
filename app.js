@@ -213,26 +213,63 @@
   function schedulePush() {
     if (!window.cloud || window.cloud.status.status === 'signed-out') return;
     clearTimeout(pushTimer);
-    pushTimer = setTimeout(() => window.cloud.push(state), 800);
+    pushTimer = setTimeout(pushSynced, 800);
   }
 
+  // While signed in the database is the source of truth: on load we take the
+  // server's copy. The one exception is work made on this device that never
+  // reached the server (edited offline, or before signing in) — that would be
+  // lost, so it either wins outright or, if the server also moved on, asks.
   async function reconcile() {
     if (!window.cloud || !window.cloud.status.user) return;
     const remote = await window.cloud.pull();
-    const localAt = state.updatedAt || 0;
-    const remoteAt = remote && remote.data ? (remote.data.updatedAt || 0) : -1;
 
-    if (remote && remoteAt > localAt) {
-      // The other device edited more recently, so take its copy.
-      state = Object.assign(blank(), remote.data);
-      state.tasks = (state.tasks || []).map(normalise);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      ui.view = VIEWS.includes(state.view) ? state.view : ui.view;
-      render();
-    } else {
-      // Ours is newer (or the account has no board yet): publish it.
-      await window.cloud.push(state);
+    // syncedAt marks the last state this device successfully exchanged with
+    // the server; anything later is local-only work.
+    const localDirty = (state.updatedAt || 0) > (state.syncedAt || 0);
+
+    if (!remote) {
+      await pushSynced();            // first sign-in: seed the server
+      return;
     }
+    if (!localDirty) {
+      adoptRemote(remote.data);      // server wins, the normal case
+      return;
+    }
+
+    const remoteMoved = (remote.data.updatedAt || 0) > (state.syncedAt || 0);
+    if (!remoteMoved) {
+      await pushSynced();            // only this device has changes
+      return;
+    }
+
+    const localCount = state.tasks.length;
+    const remoteCount = (remote.data.tasks || []).length;
+    const keepRemote = confirm(
+      'This board changed in two places since it last synced.\n\n'
+      + `This device: ${localCount} task${localCount === 1 ? '' : 's'}\n`
+      + `Synced copy: ${remoteCount} task${remoteCount === 1 ? '' : 's'}\n\n`
+      + 'OK — use the synced copy.\nCancel — keep this device and overwrite the server.');
+    if (keepRemote) adoptRemote(remote.data);
+    else await pushSynced();
+  }
+
+  async function pushSynced() {
+    const ok = await window.cloud.push(state);
+    if (!ok) return;
+    state.syncedAt = state.updatedAt || Date.now();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  function adoptRemote(data) {
+    state = Object.assign(blank(), data);
+    state.tasks = (state.tasks || []).map(normalise);
+    const ids = state.sections.map((x) => x.id);
+    state.tasks.forEach((t) => { if (!ids.includes(t.section)) t.section = ids[0]; });
+    state.syncedAt = state.updatedAt || Date.now();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    if (VIEWS.includes(state.view)) ui.view = state.view;
+    render();
   }
 
   window.addEventListener('cloud:ready', reconcile);
