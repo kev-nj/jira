@@ -11,7 +11,7 @@
     { id: 'doing', name: 'In Progress' },
     { id: 'done', name: 'Done' },
   ];
-  const SECTIONS = [
+  const DEFAULT_SECTIONS = [
     { id: 'project', name: 'Project' },
     { id: 'personal', name: 'Non-project' },
   ];
@@ -93,15 +93,28 @@
   // =========================================================================
   // State
   // =========================================================================
-  let state = load();
+  let state;
+  state = load();
   const VIEWS = ['day', 'workweek', 'week', 'month'];
   let ui = { view: VIEWS.includes(state.view) ? state.view : 'day', cursor: todayISO() };
 
   function blank() {
     return {
       version: 2, name: 'To-Do Board', prefix: 'T', counter: 0,
-      view: 'day', sort: 'manual', tasks: [],
+      view: 'day', sort: 'manual',
+      sections: DEFAULT_SECTIONS.map((x) => ({ ...x })),
+      tasks: [],
     };
+  }
+
+  function firstSectionId() {
+    return state && state.sections && state.sections.length
+      ? state.sections[0].id : DEFAULT_SECTIONS[0].id;
+  }
+
+  function sectionName(id) {
+    const found = state.sections.find((x) => x.id === id);
+    return found ? found.name : id;
   }
 
   function normalise(task) {
@@ -111,7 +124,7 @@
       title: '',
       notes: '',
       status: 'todo',
-      section: 'personal',
+      section: firstSectionId(),
       project: '',
       assignee: '',
       date: todayISO(),
@@ -134,7 +147,13 @@
         const parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.tasks)) {
           const s = Object.assign(blank(), parsed);
+          if (!Array.isArray(s.sections) || !s.sections.length) {
+            s.sections = DEFAULT_SECTIONS.map((x) => ({ ...x }));
+          }
           s.tasks = s.tasks.map(normalise);
+          // A task whose section was deleted elsewhere lands in the first one.
+          const ids = s.sections.map((x) => x.id);
+          s.tasks.forEach((t) => { if (!ids.includes(t.section)) t.section = ids[0]; });
           return s;
         }
       }
@@ -287,6 +306,9 @@
         parse(ui.cursor).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
     }
 
+    fillSectionSelect(el('filterSection'), 'All sections');
+    fillSectionSelect(form.elements.namedItem('section'));
+
     const projects = [...new Set(state.tasks.map((t) => t.project).filter(Boolean))].sort();
     const sel = el('filterProject');
     const keep = sel.value;
@@ -311,6 +333,15 @@
     people.forEach((p) => pdl.append(Object.assign(document.createElement('option'), { value: p })));
 
     updateSummary();
+  }
+
+  function fillSectionSelect(sel, blankLabel) {
+    const keep = sel.value;
+    sel.textContent = '';
+    if (blankLabel) sel.append(new Option(blankLabel, ''));
+    state.sections.forEach((x) => sel.append(new Option(x.name, x.id)));
+    const ids = state.sections.map((x) => x.id);
+    sel.value = ids.includes(keep) ? keep : (blankLabel ? '' : ids[0]);
   }
 
   function updateSummary() {
@@ -350,16 +381,14 @@
       const body = document.createElement('div');
       body.className = 'column-body';
 
-      for (const section of SECTIONS) {
+      for (const section of state.sections) {
         const group = document.createElement('div');
         group.className = 'group';
         group.dataset.date = ui.cursor;
         group.dataset.section = section.id;
         group.dataset.status = status.id;
 
-        const label = document.createElement('div');
-        label.className = 'group-head';
-        label.textContent = section.name;
+        const label = sectionHeading(section);
         const n = document.createElement('span');
         n.className = 'group-count';
         const items = all.filter((t) => t.section === section.id);
@@ -381,7 +410,9 @@
         scroll.className = 'group-scroll';
         scroll.append(list);
         if (status.id !== 'done') {
-          scroll.append(quickAdd({ status: status.id, section: section.id, date: ui.cursor }));
+          const quick = quickAdd({ status: status.id, section: section.id, date: ui.cursor });
+          scroll.append(quick);
+          openOnBlankClick(scroll, list, quick);
         }
         group.append(scroll);
         // The whole group accepts drops — its header and blank space included —
@@ -468,16 +499,13 @@
       const body = document.createElement('div');
       body.className = 'column-body';
 
-      for (const section of SECTIONS) {
+      for (const section of state.sections) {
         const group = document.createElement('div');
         group.className = 'group';
         group.dataset.date = date;
         group.dataset.section = section.id;
 
-        const label = document.createElement('div');
-        label.className = 'group-head';
-        label.textContent = section.name;
-        group.append(label);
+        group.append(sectionHeading(section));
 
         const list = document.createElement('ul');
         list.className = 'cards';
@@ -487,7 +515,9 @@
 
         const scroll = document.createElement('div');
         scroll.className = 'group-scroll';
-        scroll.append(list, quickAdd({ section: section.id, date }, true));
+        const quick = quickAdd({ section: section.id, date }, true);
+        scroll.append(list, quick);
+        openOnBlankClick(scroll, list, quick);
         group.append(scroll);
         dropTarget(group, { section: section.id, date }, list);
         body.append(group);
@@ -633,7 +663,7 @@
       t.textContent = fmtTime(task.time);
       meta.append(t);
     }
-    if (task.section === 'project' && task.project && !compact) {
+    if (task.project && !compact) {
       hasMeta = true;
       const p = document.createElement('span');
       p.className = 'chip';
@@ -933,11 +963,13 @@
     input.placeholder = 'Task, then Enter';
     input.hidden = true;
 
-    btn.addEventListener('click', () => {
+    const open = () => {
       btn.hidden = true;
       input.hidden = false;
       input.focus();
-    });
+    };
+    wrap.openInput = open;
+    btn.addEventListener('click', open);
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { input.value = ''; input.blur(); return; }
       if (e.key !== 'Enter') return;
@@ -956,6 +988,56 @@
 
     wrap.append(btn, input);
     return wrap;
+  }
+
+  // Double-clicking a section heading turns it into an input; Enter or blur
+  // commits, Escape abandons. Renaming is frequent, so it lives on the board.
+  function sectionHeading(section) {
+    const head = document.createElement('div');
+    head.className = 'group-head';
+
+    const text = document.createElement('span');
+    text.className = 'group-name';
+    text.textContent = section.name;
+    text.title = 'Double-click to rename';
+    head.append(text);
+
+    head.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.group-count')) return;
+      const input = document.createElement('input');
+      input.className = 'group-rename';
+      input.value = section.name;
+      input.maxLength = 40;
+
+      const commit = (save_) => {
+        if (!input.isConnected) return;
+        const name = input.value.trim();
+        if (save_ && name && name !== section.name) {
+          const live = state.sections.find((x) => x.id === section.id);
+          if (live) { live.name = name; save(); }
+        }
+        render();
+      };
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') { ev.preventDefault(); commit(true); }
+        if (ev.key === 'Escape') { ev.preventDefault(); commit(false); }
+      });
+      input.addEventListener('blur', () => commit(true));
+
+      text.replaceWith(input);
+      input.focus();
+      input.select();
+    });
+    return head;
+  }
+
+  // Clicks that land on a section's empty space — not on a card — start a new
+  // task there, so the whole section is a target and not just the button.
+  function openOnBlankClick(scroll, list, quick) {
+    scroll.addEventListener('click', (e) => {
+      if (e.target !== scroll && e.target !== list) return;
+      quick.openInput();
+    });
   }
 
   // Re-render replaces the node, so find the equivalent input and refocus it.
@@ -1003,13 +1085,12 @@
       field('priority').value = task.priority;
       draftSubs = task.subtasks.map((s) => ({ ...s }));
     } else {
-      field('section').value = preset.section || 'project';
+      field('section').value = preset.section || firstSectionId();
       field('date').value = preset.date || ui.cursor;
       field('status').value = preset.status || 'todo';
       draftSubs = [];
     }
     renderSubs();
-    toggleProjectField();
     modal.hidden = false;
     field('title').focus();
   }
@@ -1020,13 +1101,7 @@
     draftSubs = [];
   }
 
-  // The project name only makes sense on project work.
-  function toggleProjectField() {
-    const isProject = field('section').value === 'project';
-    field('project').disabled = !isProject;
-    field('project').closest('label').classList.toggle('disabled', !isProject);
-  }
-  field('section').addEventListener('change', toggleProjectField);
+
 
   function renderSubs() {
     const list = el('subList');
@@ -1077,7 +1152,7 @@
       title: field('title').value.trim(),
       notes: field('notes').value.trim(),
       section,
-      project: section === 'project' ? field('project').value.trim() : '',
+      project: field('project').value.trim(),
       assignee: field('assignee').value.trim(),
       date: field('date').value || todayISO(),
       time: field('time').value || null,
@@ -1113,6 +1188,229 @@
   el('cancelBtn').addEventListener('click', closeModal);
   el('modalClose').addEventListener('click', closeModal);
   modal.addEventListener('mousedown', (e) => { if (e.target === modal) closeModal(); });
+
+  // =========================================================================
+  // Sections manager: add, reorder, delete. Renaming also works here, but the
+  // fast path is double-clicking the heading on the board.
+  // =========================================================================
+  const sectionsModal = el('sectionsModal');
+
+  function slug(name) {
+    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'section';
+    let id = base;
+    let n = 2;
+    while (state.sections.some((x) => x.id === id)) id = `${base}-${n++}`;
+    return id;
+  }
+
+  const countIn = (id) => state.tasks.filter((t) => t.section === id).length;
+
+  let draggingSection = null;
+
+  function moveSection(from, to) {
+    if (to < 0 || to >= state.sections.length || from === to) return;
+    const [moved] = state.sections.splice(from, 1);
+    state.sections.splice(to, 0, moved);
+    save();
+    renderSections();
+    render();
+  }
+
+  const clearSectionMarks = () => el('sectionsList')
+    .querySelectorAll('.drop-before,.drop-after')
+    .forEach((n) => n.classList.remove('drop-before', 'drop-after'));
+
+  function renderSections() {
+    const list = el('sectionsList');
+    list.textContent = '';
+    wireSectionDrop(list);
+
+    state.sections.forEach((section, i) => {
+      const li = document.createElement('li');
+      li.className = 'section-row';
+
+      li.dataset.id = section.id;
+
+      const handle = document.createElement('button');
+      handle.className = 'drag-handle';
+      handle.type = 'button';
+      handle.textContent = '⠿';
+      handle.title = 'Drag to reorder (or use the arrow keys)';
+      handle.setAttribute('aria-label', `Reorder ${section.name}`);
+      // The row is only draggable while the handle is held, so the name field
+      // stays editable and selectable the rest of the time.
+      handle.addEventListener('mousedown', () => { li.draggable = true; });
+      handle.addEventListener('touchstart', () => { li.draggable = true; }, { passive: true });
+      handle.addEventListener('keydown', (e) => {
+        const delta = e.key === 'ArrowUp' ? -1 : (e.key === 'ArrowDown' ? 1 : 0);
+        if (!delta) return;
+        e.preventDefault();
+        moveSection(i, i + delta);
+        const rows = el('sectionsList').querySelectorAll('.drag-handle');
+        if (rows[i + delta]) rows[i + delta].focus();
+      });
+      li.append(handle);
+
+      li.addEventListener('dragstart', (e) => {
+        draggingSection = section.id;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', section.id);
+        li.classList.add('dragging');
+      });
+      li.addEventListener('dragend', () => {
+        draggingSection = null;
+        li.draggable = false;
+        li.classList.remove('dragging');
+        clearSectionMarks();
+      });
+
+      const name = document.createElement('input');
+      name.className = 'section-name';
+      name.value = section.name;
+      name.maxLength = 40;
+      name.addEventListener('change', () => {
+        const value = name.value.trim();
+        if (!value) { name.value = section.name; return; }
+        section.name = value;
+        save();
+        render();
+      });
+      li.append(name);
+
+      const count = document.createElement('span');
+      count.className = 'section-count';
+      const n = countIn(section.id);
+      count.textContent = `${n} task${n === 1 ? '' : 's'}`;
+      count.title = 'Tasks currently in this section';
+      if (!n) count.classList.add('is-zero');
+      li.append(count);
+
+      const del = document.createElement('button');
+      del.className = 'icon';
+      del.textContent = '✕';
+      del.title = 'Delete section';
+      del.disabled = state.sections.length < 2;
+      del.addEventListener('click', () => askDelete(li, section));
+      li.append(del);
+
+      list.append(li);
+    });
+  }
+
+  // Reordering by drag: the row under the cursor shows where it will land.
+  function wireSectionDrop(list) {
+    if (list.dataset.wired) return;
+    list.dataset.wired = '1';
+
+    list.addEventListener('dragover', (e) => {
+      if (!draggingSection) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      clearSectionMarks();
+      const rows = [...list.querySelectorAll('.section-row:not(.dragging)')];
+      const after = rows.find((r) => {
+        const box = r.getBoundingClientRect();
+        return e.clientY <= box.top + box.height / 2;
+      });
+      if (after) after.classList.add('drop-before');
+      else if (rows.length) rows[rows.length - 1].classList.add('drop-after');
+    });
+
+    list.addEventListener('drop', (e) => {
+      if (!draggingSection) return;
+      e.preventDefault();
+      const rows = [...list.querySelectorAll('.section-row')];
+      const from = state.sections.findIndex((x) => x.id === draggingSection);
+      const others = rows.filter((r) => r.dataset.id !== draggingSection);
+      const afterRow = others.find((r) => {
+        const box = r.getBoundingClientRect();
+        return e.clientY <= box.top + box.height / 2;
+      });
+      const targetId = afterRow ? afterRow.dataset.id : null;
+      clearSectionMarks();
+      draggingSection = null;
+      if (targetId === null) { moveSection(from, state.sections.length - 1); return; }
+      let to = state.sections.findIndex((x) => x.id === targetId);
+      if (from < to) to -= 1;
+      moveSection(from, to);
+    });
+
+    list.addEventListener('dragleave', (e) => {
+      if (!list.contains(e.relatedTarget)) clearSectionMarks();
+    });
+  }
+
+  // Deleting a section with work in it has to say where that work goes.
+  function askDelete(row, section) {
+    if (row.nextElementSibling && row.nextElementSibling.classList.contains('confirm-row')) {
+      row.nextElementSibling.remove();
+      return;
+    }
+    const n = countIn(section.id);
+    const confirmRow = document.createElement('li');
+    confirmRow.className = 'confirm-row';
+
+    if (!n) {
+      confirmRow.append(Object.assign(document.createElement('span'),
+        { textContent: `Delete “${section.name}”?` }));
+    } else {
+      confirmRow.append(Object.assign(document.createElement('span'),
+        { textContent: `Move ${n} task${n === 1 ? '' : 's'} to` }));
+      const sel = document.createElement('select');
+      state.sections.filter((x) => x.id !== section.id)
+        .forEach((x) => sel.append(new Option(x.name, x.id)));
+      sel.className = 'section-target';
+      confirmRow.append(sel);
+    }
+
+    const go = document.createElement('button');
+    go.className = 'danger';
+    go.textContent = n ? 'Move & delete' : 'Delete';
+    go.addEventListener('click', () => {
+      const target = confirmRow.querySelector('.section-target');
+      if (target) {
+        state.tasks.forEach((t) => { if (t.section === section.id) t.section = target.value; });
+      }
+      state.sections = state.sections.filter((x) => x.id !== section.id);
+      save();
+      renderSections();
+      render();
+    });
+
+    const cancel = document.createElement('button');
+    cancel.className = 'ghost';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => confirmRow.remove());
+
+    confirmRow.append(Object.assign(document.createElement('span'), { className: 'spacer' }), cancel, go);
+    row.after(confirmRow);
+  }
+
+  el('sectionAddForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const input = el('sectionAddInput');
+    const name = input.value.trim();
+    if (!name) return;
+    state.sections.push({ id: slug(name), name });
+    input.value = '';
+    save();
+    renderSections();
+    render();
+  });
+
+  function openSections() {
+    renderSections();
+    sectionsModal.hidden = false;
+    el('sectionAddInput').focus();
+  }
+  const closeSections = () => { sectionsModal.hidden = true; };
+
+  el('sectionsBtn').addEventListener('click', openSections);
+  el('sectionsClose').addEventListener('click', closeSections);
+  el('sectionsDone').addEventListener('click', closeSections);
+  sectionsModal.addEventListener('mousedown', (e) => {
+    if (e.target === sectionsModal) closeSections();
+  });
 
   // =========================================================================
   // Chrome: view switching, navigation, filters, menu
@@ -1161,8 +1459,9 @@
   document.addEventListener('click', () => { menuList.hidden = true; });
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !sectionsModal.hidden) { closeSections(); return; }
     if (e.key === 'Escape' && !modal.hidden) { closeModal(); return; }
-    if (!modal.hidden) return;
+    if (!modal.hidden || !sectionsModal.hidden) return;
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
     if (typing) return;
     if (e.key === 'n') { e.preventDefault(); openModal(null, { date: ui.cursor }); }
