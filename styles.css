@@ -214,6 +214,18 @@ textarea{resize:vertical}
 .card.is-starred{border-color:var(--line-strong)}
 @media (hover:none){.star{opacity:1}}
 .mini-star{flex:none;font-size:9px;color:var(--text)}
+#cloudBtn{font-variant-numeric:tabular-nums;position:relative;padding-left:24px !important}
+#cloudBtn::before{
+  content:"";position:absolute;left:11px;top:50%;margin-top:-3px;
+  width:6px;height:6px;border-radius:50%;background:var(--faint);
+}
+#cloudBtn[data-status=synced]::before,#cloudBtn[data-status="signed-in"]::before{background:var(--text)}
+#cloudBtn[data-status=saving]::before{background:var(--muted);animation:pulse 1s ease-in-out infinite}
+#cloudBtn[data-status=connecting]::before{animation:pulse 1s ease-in-out infinite}
+#cloudBtn[data-status=error]::before{background:transparent;box-shadow:inset 0 0 0 1.5px var(--text)}
+#cloudBtn[data-status=error]{color:var(--text)}
+@keyframes pulse{50%{opacity:.3}}
+
 #starBtn[aria-pressed=true]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
 #starBtn[aria-pressed=true]:hover{background:var(--accent);opacity:.88}
 

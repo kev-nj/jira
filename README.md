@@ -42,6 +42,26 @@ Open `index.html`, or serve it with `python3 -m http.server 8000`. Note that `fi
 ## Deploy to GitHub Pages
 Push to `main`, then Settings → Pages → Deploy from a branch → `main` → `/ (root)`.
 
+## Sync across devices (Supabase)
+The board runs fine signed out — localStorage remains the source of truth, so it works offline.
+Signing in adds a synced copy in Supabase.
+
+**How it works:** every save stamps `updatedAt` and pushes to Supabase 0.8s after edits settle.
+On load, the local and remote copies are compared and the more recent one wins. Storage is one
+`boards` row per user (`user_id`, `data` jsonb, `updated_at`), protected by row-level security —
+each policy is scoped to `auth.uid() = user_id`, so the publishable key in `cloud.js` grants
+access to nothing on its own.
+
+**One-time setup (GitHub OAuth):**
+1. GitHub → Settings → Developer settings → OAuth Apps → **New OAuth App**
+   - Homepage URL: `https://kev-nj.github.io/jira/`
+   - Authorization callback URL: `https://ekfgbqxkqidgsnzzqvkh.supabase.co/auth/v1/callback`
+2. Copy the Client ID, generate a Client Secret.
+3. Supabase dashboard → Authentication → Providers → **GitHub** → enable, paste both, save.
+4. Supabase dashboard → Authentication → URL Configuration:
+   - Site URL: `https://kev-nj.github.io/jira/`
+   - Additional redirect URLs: add `http://localhost:8000` for local testing.
+
 ## Notes
 Data is per-browser and per-origin; it does not sync between devices. Use **Export JSON** to back it
 up. Tasks from the earlier `jira-board.v1` board are migrated automatically on first load.
