@@ -192,13 +192,83 @@
   }
 
   function save() {
+    // Stamped on every write so two devices can be compared by recency.
+    state.updatedAt = Date.now();
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch (e) {
       console.error('Could not save.', e);
       alert('Saving failed — browser storage may be full or blocked.');
     }
+    schedulePush();
   }
+
+  // =========================================================================
+  // Cloud sync. localStorage stays the source of truth for rendering, so the
+  // board works offline and signed out; the remote copy is reconciled on load
+  // and pushed after edits settle.
+  // =========================================================================
+  let pushTimer = null;
+
+  function schedulePush() {
+    if (!window.cloud || window.cloud.status.status === 'signed-out') return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => window.cloud.push(state), 800);
+  }
+
+  async function reconcile() {
+    if (!window.cloud || !window.cloud.status.user) return;
+    const remote = await window.cloud.pull();
+    const localAt = state.updatedAt || 0;
+    const remoteAt = remote && remote.data ? (remote.data.updatedAt || 0) : -1;
+
+    if (remote && remoteAt > localAt) {
+      // The other device edited more recently, so take its copy.
+      state = Object.assign(blank(), remote.data);
+      state.tasks = (state.tasks || []).map(normalise);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      ui.view = VIEWS.includes(state.view) ? state.view : ui.view;
+      render();
+    } else {
+      // Ours is newer (or the account has no board yet): publish it.
+      await window.cloud.push(state);
+    }
+  }
+
+  window.addEventListener('cloud:ready', reconcile);
+  window.addEventListener('cloud:status', (e) => {
+    updateCloudButton(e.detail);
+    if (e.detail.status === 'signed-in') reconcile();
+  });
+
+  function updateCloudButton(detail) {
+    const btn = el('cloudBtn');
+    const label = {
+      'signed-out': 'Sign in',
+      connecting: 'Connecting…',
+      'signed-in': 'Synced',
+      saving: 'Saving…',
+      synced: 'Synced',
+      error: 'Sync error',
+    }[detail.status] || 'Sign in';
+    btn.textContent = label;
+    btn.dataset.status = detail.status;
+    btn.title = detail.error
+      || (detail.user ? `Signed in as ${detail.user.email || detail.user.id} — click to sign out`
+        : 'Sign in to sync across devices');
+  }
+
+  el('cloudBtn').addEventListener('click', () => {
+    if (!window.cloud) {
+      alert('Sync did not load. Check the browser console — cloud.js may have failed to fetch.');
+      return;
+    }
+    if (window.cloud.status.user) {
+      if (confirm('Sign out? Your tasks stay on this device.')) window.cloud.signOut();
+    } else {
+      window.cloud.signIn();
+    }
+  });
 
   const nextKey = () => `${state.prefix}-${(state.counter += 1)}`;
   const byId = (id) => state.tasks.find((t) => t.id === id);
