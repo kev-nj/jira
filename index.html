@@ -28,11 +28,7 @@
       <button id="nextBtn" class="ghost" title="Next">›</button>
     </div>
     <input id="search" type="search" placeholder="Search tasks…" autocomplete="off">
-    <select id="filterSection">
-      <option value="">All sections</option>
-      <option value="project">Project</option>
-      <option value="personal">Non-project</option>
-    </select>
+    <select id="filterSection"><option value="">All sections</option></select>
     <select id="filterProject"><option value="">All projects</option></select>
     <select id="filterPerson"><option value="">Everyone</option></select>
     <button id="starBtn" class="ghost" aria-pressed="false" title="Show favourites only">★</button>
@@ -41,6 +37,7 @@
     <div class="menu">
       <button id="menuBtn" class="ghost" aria-haspopup="true">⋯</button>
       <div id="menuList" class="menu-list" hidden>
+        <button id="sectionsBtn">Sections…</button>
         <button id="sortBtn">Sort by time</button>
         <button id="rollOverdueBtn">Pull overdue into today</button>
         <button id="exportBtn">Export JSON</button>
@@ -72,10 +69,7 @@
 
       <div class="row">
         <label>Section
-          <select name="section">
-            <option value="project">Project</option>
-            <option value="personal">Non-project</option>
-          </select>
+          <select name="section"></select>
         </label>
         <label>Project
           <input name="project" list="projectList" placeholder="Which project?">
@@ -125,6 +119,26 @@
         <button type="submit" class="primary">Save</button>
       </div>
     </form>
+  </div>
+</div>
+
+<div id="sectionsModal" class="modal" hidden>
+  <div class="modal-card narrow" role="dialog" aria-modal="true" aria-labelledby="sectionsTitle">
+    <div class="modal-head">
+      <h2 id="sectionsTitle">Sections</h2>
+      <button id="sectionsClose" class="ghost">✕</button>
+    </div>
+    <p class="hint">Sections group tasks inside every day. Drag the handle to reorder,
+      or double-click a section heading on the board to rename it there.</p>
+    <ul id="sectionsList" class="sections-list"></ul>
+    <form id="sectionAddForm" class="section-add">
+      <input id="sectionAddInput" type="text" maxlength="40" placeholder="New section name">
+      <button type="submit" class="primary">Add</button>
+    </form>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button type="button" id="sectionsDone" class="primary">Done</button>
+    </div>
   </div>
 </div>
 

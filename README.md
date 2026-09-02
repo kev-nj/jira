@@ -4,11 +4,17 @@ A kanban-style planner for daily to-dos. No build step, no backend — everythin
 browser's `localStorage` under `todo-board.v2`.
 
 ## Views
-- **Day** — three status columns (To Do / In Progress / Done), each split into **Project** and
-  **Non-project** sections. A toolbar button moves the day's unfinished tasks to the next day.
+- **Day** — three status columns (To Do / In Progress / Done), each split into your **sections**
+  (Project and Non-project by default). A toolbar button moves the day's unfinished tasks
+  to the next day.
 - **Work** — Monday–Friday only; rolling Friday's leftovers skips the weekend and lands on Monday.
 - **Week** — Monday–Sunday columns, each with both sections and its own rollover button (`↦`).
 - **Month** — calendar grid; click a date number to open that day.
+
+## Sections
+Sections are yours to define. Double-click a section heading on the board to rename it in place,
+or open `⋯ → Sections…` to add, reorder, and delete them. Deleting a section that holds tasks
+asks where to move that work first — nothing is discarded silently.
 
 ## Tasks
 - Title, notes, section, project, **assignee**, date, time, status, priority
