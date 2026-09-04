@@ -1,6 +1,11 @@
-/* Supabase sync. Loaded as a module, so it runs after app.js has already
-   rendered from localStorage — the board works offline and signed out, and
-   the cloud is a layer on top rather than a prerequisite. */
+/* Supabase sync layer. Loaded as a module, so it runs after app.js has already
+   rendered from localStorage — the board works offline and signed out, and the
+   cloud is a layer on top rather than a prerequisite.
+
+   The unit of sync is one row per task, not one blob per board, so a device
+   holding a stale copy can only affect the rows it actually touched. Reads are
+   a delta against a monotonic `seq` watermark; writes go through the
+   apply_mutations() RPC, which merges per field against the *server's* clock. */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 
 // Both values are safe in public source: the publishable key grants nothing on
@@ -24,6 +29,8 @@ function setStatus(status, error = null) {
   emit();
 }
 
+let channel = null;
+
 const cloud = {
   get status() { return { ...state }; },
 
@@ -45,38 +52,77 @@ const cloud = {
   },
 
   async signOut() {
+    if (channel) { client.removeChannel(channel); channel = null; }
     await client.auth.signOut();
     state.user = null;
     setStatus('signed-out');
   },
 
-  // Returns the remote board, or null when this account has none yet.
-  async pull() {
+  /* Everything written since `sinceSeq`, tombstones included — a delete has to
+     travel as a row or a device that was offline through it would resurrect the
+     task. Returns null on failure so the caller can leave its watermark alone
+     and retry, rather than mistaking a network error for an empty board. */
+  async pull(sinceSeq = 0) {
     if (!state.user) return null;
-    const { data, error } = await client
-      .from('boards')
-      .select('data, updated_at')
-      .eq('user_id', state.user.id)
-      .maybeSingle();
+    const uid = state.user.id;
+    const rows = (table) => client
+      .from(table)
+      .select('id, fields, deleted_at, seq')
+      .eq('user_id', uid)
+      .gt('seq', sinceSeq)
+      .order('seq');
+
+    const [tasks, sections, board] = await Promise.all([
+      rows('tasks'),
+      rows('sections'),
+      client.from('boards').select('fields, data, seq').eq('user_id', uid).maybeSingle(),
+    ]);
+
+    const failed = [tasks, sections, board].find((r) => r.error);
+    if (failed) {
+      setStatus('error', failed.error.message);
+      return null;
+    }
+
+    const seqs = [
+      ...tasks.data.map((r) => r.seq),
+      ...sections.data.map((r) => r.seq),
+      board.data ? board.data.seq : 0,
+    ];
+    return {
+      tasks: tasks.data,
+      sections: sections.data,
+      // The board row is small and singular, so it is fetched whole rather than
+      // by delta; `legacy` carries the pre-migration blob on first run.
+      board: board.data ? board.data.fields : null,
+      legacy: board.data ? board.data.data : null,
+      seq: Math.max(sinceSeq, ...seqs, 0),
+    };
+  },
+
+  // Returns the server's new high-water seq, or null if the write failed.
+  async push(mutations) {
+    if (!state.user || !mutations.length) return null;
+    setStatus('saving');
+    const { data, error } = await client.rpc('apply_mutations', { p_mutations: mutations });
     if (error) {
       setStatus('error', error.message);
       return null;
     }
+    setStatus('synced');
     return data;
   },
 
-  async push(board) {
-    if (!state.user) return false;
-    setStatus('saving');
-    const { error } = await client
-      .from('boards')
-      .upsert({ user_id: state.user.id, data: board }, { onConflict: 'user_id' });
-    if (error) {
-      setStatus('error', error.message);
-      return false;
-    }
-    setStatus('synced');
-    return true;
+  /* Live convergence: any write from another device nudges this one to pull.
+     Without it two open devices only agree on next load. */
+  subscribe(onChange) {
+    if (!state.user || channel) return;
+    const filter = `user_id=eq.${state.user.id}`;
+    channel = client.channel('board-sync');
+    ['tasks', 'sections', 'boards'].forEach((table) => {
+      channel.on('postgres_changes', { event: '*', schema: 'public', table, filter }, onChange);
+    });
+    channel.subscribe();
   },
 };
 
