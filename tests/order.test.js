@@ -35,6 +35,23 @@ for (let i = 0; i < 200; i += 1) {
 }
 check('200 repeated splits stay ordered', tight[1] > '', true);
 
+/* Dragging repeatedly to the top is the case that was broken: midKey could
+   emit a key ending in the lowest digit, and no key can sort below one, so
+   nothing can be placed above that task again.
+   It surfaces only after several inserts at the head, so it would have shown up
+   long after the fact as "I can't drag anything to the top any more". */
+let head = spreadKeys(1)[0];
+let headOk = true;
+let endsLowest = 0;
+for (let i = 0; i < 500; i += 1) {
+  const next = midKey('', head);
+  if (!next || next >= head) { headOk = false; break; }
+  if (next[next.length - 1] === '0') endsLowest += 1;
+  head = next;
+}
+check('500 inserts at the head stay ordered', headOk, true);
+check('no key ends in the lowest digit', endsLowest, 0);
+
 // Random insertions anywhere in a growing list must never break the ordering
 // or produce a duplicate — the two ways a key scheme fails in practice.
 let list = spreadKeys(3);
