@@ -91,6 +91,70 @@
   }
 
   // =========================================================================
+  // Fractional ordering
+  //
+  // Order is a string key generated midway between its neighbours rather than
+  // an index, so two devices reordering the same list converge instead of
+  // renumbering over each other. The digits are in ascending ASCII order, which
+  // is what lets plain string comparison sort them.
+  // =========================================================================
+  const KEY_DIGITS =
+    '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+  function midKey(a, b) {
+    const lo = a || '';
+    const hi = b || '';
+    let prefix = '';
+    for (let i = 0; ; i += 1) {
+      const ca = i < lo.length ? KEY_DIGITS.indexOf(lo[i]) : -1;
+      const cb = i < hi.length ? KEY_DIGITS.indexOf(hi[i]) : KEY_DIGITS.length;
+      if (cb - ca > 1) {
+        // A key must never end in the lowest digit: nothing could ever sort
+        // below it afterwards, so the top of the list would become unusable.
+        const mid = Math.max(Math.floor((ca + cb) / 2), 1);
+        if (mid < cb) return prefix + KEY_DIGITS[mid];
+      }
+      // Too tight to split at this digit; descend a level and try again.
+      prefix += i < lo.length ? lo[i] : KEY_DIGITS[0];
+    }
+  }
+
+  // n ascending keys, for seeding a list that has no keys yet.
+  function spreadKeys(n) {
+    const out = [];
+    let last = '';
+    for (let i = 0; i < n; i += 1) {
+      last = midKey(last, '');
+      out.push(last);
+    }
+    return out;
+  }
+
+  // Boards saved before fractional keys have numeric `order`; rank each date's
+  // tasks by it once and hand out string keys in that order.
+  function upgradeOrder(s) {
+    const numeric = s.tasks.some((t) => typeof t.order === 'number');
+    if (numeric) {
+      const byDate = {};
+      s.tasks.forEach((t) => { (byDate[t.date] = byDate[t.date] || []).push(t); });
+      Object.values(byDate).forEach((group) => {
+        group.sort((a, b) => (a.order || 0) - (b.order || 0));
+        const keys = spreadKeys(group.length);
+        group.forEach((t, i) => { t.order = keys[i]; });
+      });
+    }
+    const keys = spreadKeys(s.sections.length);
+    s.sections.forEach((sec, i) => { if (!sec.order) sec.order = keys[i]; });
+    sortSections(s);
+    return s;
+  }
+
+  function sortSections(s) {
+    // Plain string compare: the key digits are in ascending ASCII order.
+    return s.sections.sort((a, b) => (a.order < b.order ? -1 : 1));
+  }
+
+  // =========================================================================
   // State
   // =========================================================================
   let state;
@@ -131,7 +195,7 @@
       time: null,
       priority: 'medium',
       subtasks: [],
-      order: 0,
+      order: '',
       createdAt: Date.now(),
       completedAt: null,
       rolledFrom: null,
@@ -154,15 +218,15 @@
           // A task whose section was deleted elsewhere lands in the first one.
           const ids = s.sections.map((x) => x.id);
           s.tasks.forEach((t) => { if (!ids.includes(t.section)) t.section = ids[0]; });
-          return s;
+          return upgradeOrder(s);
         }
       }
       const legacy = localStorage.getItem(LEGACY_KEY);
-      if (legacy) return migrate(JSON.parse(legacy));
+      if (legacy) return upgradeOrder(migrate(JSON.parse(legacy)));
     } catch (e) {
       console.warn('Could not read saved board; starting fresh.', e);
     }
-    return blank();
+    return upgradeOrder(blank());
   }
 
   // Carry over anything from the old kanban board so no work is lost.
@@ -191,91 +255,219 @@
     return s;
   }
 
-  function save() {
-    // Stamped on every write so two devices can be compared by recency.
-    state.updatedAt = Date.now();
+  function persist() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch (e) {
       console.error('Could not save.', e);
       alert('Saving failed — browser storage may be full or blocked.');
     }
-    schedulePush();
   }
+
+  function save() {
+    // Derive what changed before writing, so no call site can forget to record
+    // itself: every mutation in the app funnels through save().
+    enqueue(diffShadow());
+    persist();
+    scheduleSync();
+  }
+
 
   // =========================================================================
-  // Cloud sync. localStorage stays the source of truth for rendering, so the
-  // board works offline and signed out; the remote copy is reconciled on load
-  // and pushed after edits settle.
+  // Cloud sync
+  //
+  // localStorage stays the source of truth for rendering, so the board works
+  // offline and signed out. Local edits are captured as per-field mutations,
+  // queued in an outbox that survives reload, and drained only after a pull has
+  // succeeded — a device can never assert state it has not first reconciled.
   // =========================================================================
-  let pushTimer = null;
+  const OUTBOX_KEY = 'todo-board.outbox';
+  const SEQ_KEY = 'todo-board.seq';
+  const SEEDED_KEY = 'todo-board.seeded';
 
-  function schedulePush() {
-    if (!window.cloud || window.cloud.status.status === 'signed-out') return;
-    clearTimeout(pushTimer);
-    pushTimer = setTimeout(pushSynced, 800);
+  // `collapsed` is deliberately absent: it is per-device view state, not data.
+  const TASK_FIELDS = ['key', 'title', 'notes', 'status', 'section', 'project',
+    'assignee', 'date', 'time', 'priority', 'subtasks', 'order', 'completedAt',
+    'rolledFrom', 'starred', 'createdAt'];
+  const SECTION_FIELDS = ['name', 'order'];
+  const BOARD_FIELDS = ['name', 'prefix', 'counter', 'view', 'sort'];
+
+  let syncedSeq = Number(localStorage.getItem(SEQ_KEY)) || 0;
+  let outbox = readOutbox();
+  let shadow = snapshot();
+  let syncTimer = null;
+  let syncing = false;
+  let syncAgain = false;
+  let subscribed = false;
+
+  function readOutbox() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(OUTBOX_KEY));
+      return Array.isArray(raw) ? raw : [];
+    } catch (e) {
+      return [];
+    }
   }
 
-  // While signed in the database is the source of truth: on load we take the
-  // server's copy. The one exception is work made on this device that never
-  // reached the server (edited offline, or before signing in) — that would be
-  // lost, so it either wins outright or, if the server also moved on, asks.
-  async function reconcile() {
-    if (!window.cloud || !window.cloud.status.user) return;
-    const remote = await window.cloud.pull();
-
-    // syncedAt marks the last state this device successfully exchanged with
-    // the server; anything later is local-only work.
-    const localDirty = (state.updatedAt || 0) > (state.syncedAt || 0);
-
-    if (!remote) {
-      await pushSynced();            // first sign-in: seed the server
-      return;
-    }
-    if (!localDirty) {
-      adoptRemote(remote.data);      // server wins, the normal case
-      return;
-    }
-
-    const remoteMoved = (remote.data.updatedAt || 0) > (state.syncedAt || 0);
-    if (!remoteMoved) {
-      await pushSynced();            // only this device has changes
-      return;
-    }
-
-    const localCount = state.tasks.length;
-    const remoteCount = (remote.data.tasks || []).length;
-    const keepRemote = confirm(
-      'This board changed in two places since it last synced.\n\n'
-      + `This device: ${localCount} task${localCount === 1 ? '' : 's'}\n`
-      + `Synced copy: ${remoteCount} task${remoteCount === 1 ? '' : 's'}\n\n`
-      + 'OK — use the synced copy.\nCancel — keep this device and overwrite the server.');
-    if (keepRemote) adoptRemote(remote.data);
-    else await pushSynced();
+  function writeOutbox() {
+    localStorage.setItem(OUTBOX_KEY, JSON.stringify(outbox));
   }
 
-  async function pushSynced() {
-    const ok = await window.cloud.push(state);
-    if (!ok) return;
-    state.syncedAt = state.updatedAt || Date.now();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  function pick(obj, keys) {
+    const out = {};
+    keys.forEach((k) => { out[k] = obj[k] === undefined ? null : obj[k]; });
+    return out;
   }
 
-  function adoptRemote(data) {
-    state = Object.assign(blank(), data);
-    state.tasks = (state.tasks || []).map(normalise);
+  // What we believe the server holds, so the next save can diff against it.
+  function snapshot() {
+    const tasks = {};
+    state.tasks.forEach((t) => { tasks[t.id] = pick(t, TASK_FIELDS); });
+    const sections = {};
+    state.sections.forEach((s) => { sections[s.id] = pick(s, SECTION_FIELDS); });
+    return { tasks, sections, board: pick(state, BOARD_FIELDS) };
+  }
+
+  function same(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  // Client-side change data capture: compare the live state to the shadow and
+  // emit one mutation per changed record, carrying only the changed fields.
+  function diffRows(table, now, before, fields) {
+    const out = [];
+    Object.keys(now).forEach((id) => {
+      const changed = {};
+      fields.forEach((k) => {
+        if (!before[id] || !same(now[id][k], before[id][k])) changed[k] = now[id][k];
+      });
+      if (Object.keys(changed).length) out.push({ table, id, fields: changed });
+    });
+    // A row that vanished locally travels as a tombstone, never as an absence.
+    Object.keys(before).forEach((id) => {
+      if (!now[id]) out.push({ table, id, fields: {}, deleted: true });
+    });
+    return out;
+  }
+
+  function diffShadow() {
+    const now = snapshot();
+    const out = [
+      ...diffRows('tasks', now.tasks, shadow.tasks, TASK_FIELDS),
+      ...diffRows('sections', now.sections, shadow.sections, SECTION_FIELDS),
+    ];
+    const board = {};
+    BOARD_FIELDS.forEach((k) => {
+      if (!same(now.board[k], shadow.board[k])) board[k] = now.board[k];
+    });
+    if (Object.keys(board).length) out.push({ table: 'boards', id: 'board', fields: board });
+    shadow = now;
+    return out;
+  }
+
+  function enqueue(mutations) {
+    if (!mutations.length) return;
+    mutations.forEach((m) => { m.mutation_id = crypto.randomUUID(); });
+    outbox = outbox.concat(mutations);
+    writeOutbox();
+  }
+
+  function scheduleSync() {
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(syncNow, 600);
+  }
+
+  // Remote rows land on top of local state; anything still queued in the outbox
+  // is re-applied over them so unsent local edits do not visibly revert.
+  function applyRemote(delta) {
+    if (delta.board) Object.assign(state, pick(delta.board, BOARD_FIELDS));
+
+    delta.sections.forEach((row) => {
+      const i = state.sections.findIndex((s) => s.id === row.id);
+      if (row.deleted_at) { if (i >= 0) state.sections.splice(i, 1); return; }
+      const merged = Object.assign({ id: row.id }, row.fields);
+      if (i >= 0) state.sections[i] = merged; else state.sections.push(merged);
+    });
+    if (!state.sections.length) state.sections = DEFAULT_SECTIONS.map((x) => ({ ...x }));
+    sortSections(state);
+
+    delta.tasks.forEach((row) => {
+      const i = state.tasks.findIndex((t) => t.id === row.id);
+      if (row.deleted_at) { if (i >= 0) state.tasks.splice(i, 1); return; }
+      const merged = normalise(Object.assign({ id: row.id }, row.fields));
+      if (i >= 0) merged.collapsed = state.tasks[i].collapsed;
+      if (i >= 0) state.tasks[i] = merged; else state.tasks.push(merged);
+    });
+
+    outbox.forEach((m) => {
+      if (m.deleted) return;
+      const row = m.table === 'tasks' ? byId(m.id)
+        : (m.table === 'sections' ? state.sections.find((s) => s.id === m.id) : state);
+      if (row) Object.assign(row, m.fields);
+    });
+
     const ids = state.sections.map((x) => x.id);
     state.tasks.forEach((t) => { if (!ids.includes(t.section)) t.section = ids[0]; });
-    state.syncedAt = state.updatedAt || Date.now();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    if (VIEWS.includes(state.view)) ui.view = state.view;
-    render();
+    shadow = snapshot();
+    persist();
   }
 
-  window.addEventListener('cloud:ready', reconcile);
+  async function drain() {
+    if (!outbox.length) return false;
+    const sending = outbox.slice();
+    const seq = await window.cloud.push(sending);
+    if (seq === null) return false;
+    const sent = new Set(sending.map((m) => m.mutation_id));
+    outbox = outbox.filter((m) => !sent.has(m.mutation_id));
+    writeOutbox();
+    return true;
+  }
+
+  // The whole local board as mutations, to seed a server that has no rows yet.
+  function seed() {
+    if (localStorage.getItem(SEEDED_KEY)) return;
+    localStorage.setItem(SEEDED_KEY, '1');
+    const now = snapshot();
+    const out = [];
+    Object.keys(now.tasks).forEach((id) => out.push({ table: 'tasks', id, fields: now.tasks[id] }));
+    Object.keys(now.sections).forEach((id) => out.push({ table: 'sections', id, fields: now.sections[id] }));
+    out.push({ table: 'boards', id: 'board', fields: { ...now.board, migrated: true } });
+    enqueue(out);
+  }
+
+  async function syncNow() {
+    if (!window.cloud || !window.cloud.status.user) return;
+    if (syncing) { syncAgain = true; return; }
+    syncing = true;
+    try {
+      const delta = await window.cloud.pull(syncedSeq);
+      if (!delta) return;                     // network error: keep the watermark
+      if (!delta.board || !delta.board.migrated) seed();
+      applyRemote(delta);
+      syncedSeq = delta.seq;
+      // Only now, having reconciled, may this device assert anything.
+      if (await drain()) {
+        const after = await window.cloud.pull(syncedSeq);
+        if (after) { applyRemote(after); syncedSeq = after.seq; }
+      }
+      localStorage.setItem(SEQ_KEY, String(syncedSeq));
+      if (!subscribed) { subscribed = true; window.cloud.subscribe(scheduleSync); }
+      render();
+    } finally {
+      syncing = false;
+      if (syncAgain) { syncAgain = false; syncNow(); }
+    }
+  }
+
+  window.addEventListener('cloud:ready', syncNow);
   window.addEventListener('cloud:status', (e) => {
     updateCloudButton(e.detail);
-    if (e.detail.status === 'signed-in') reconcile();
+    if (e.detail.status === 'signed-in') syncNow();
+  });
+  // A tab resumed after hours suspended is stale; pull before it can push.
+  window.addEventListener('focus', scheduleSync);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') scheduleSync();
   });
 
   function updateCloudButton(detail) {
@@ -311,10 +503,11 @@
   const byId = (id) => state.tasks.find((t) => t.id === id);
 
   function createTask(data) {
-    const peers = state.tasks.filter((t) => t.date === (data.date || todayISO()));
+    const peers = state.tasks.filter((t) => t.date === (data.date || todayISO()))
+      .sort((a, b) => (a.order < b.order ? -1 : 1));
     const task = normalise(Object.assign({
       key: nextKey(),
-      order: peers.length ? Math.max(...peers.map((t) => t.order)) + 1 : 0,
+      order: midKey(peers.length ? peers[peers.length - 1].order : '', ''),
     }, data));
     state.tasks.push(task);
     save();
@@ -375,7 +568,7 @@
       if (a.time && !b.time) return -1;
       if (!a.time && b.time) return 1;
     }
-    return a.order - b.order;
+    return a.order < b.order ? -1 : 1;
   }
 
   const unfinishedOn = (date) => state.tasks.filter((t) => t.date === date && t.status !== 'done');
@@ -1009,10 +1202,7 @@
       if (y > box.top + box.height / 2) before = peer;
       else { after = peer; break; }
     }
-    if (!before && !after) return 0;
-    if (!before) return after.order - 1;
-    if (!after) return before.order + 1;
-    return (before.order + after.order) / 2;
+    return midKey(before ? before.order : '', after ? after.order : '');
   }
 
   // =========================================================================
@@ -1031,7 +1221,6 @@
     pending.forEach((t) => {
       t.date = target;
       t.rolledFrom = date;
-      t.updatedAt = Date.now();
     });
     save();
     // Follow the work when looking at a single day.
@@ -1272,7 +1461,7 @@
     if (editingId) {
       const task = byId(editingId);
       const wasDone = task.status === 'done';
-      Object.assign(task, data, { updatedAt: Date.now() });
+      Object.assign(task, data);
       if (data.status === 'done' && !wasDone) task.completedAt = Date.now();
       if (data.status !== 'done') task.completedAt = null;
     } else {
@@ -1318,6 +1507,9 @@
     if (to < 0 || to >= state.sections.length || from === to) return;
     const [moved] = state.sections.splice(from, 1);
     state.sections.splice(to, 0, moved);
+    const prev = state.sections[to - 1];
+    const next = state.sections[to + 1];
+    moved.order = midKey(prev ? prev.order : '', next ? next.order : '');
     save();
     renderSections();
     render();
@@ -1498,7 +1690,8 @@
     const input = el('sectionAddInput');
     const name = input.value.trim();
     if (!name) return;
-    state.sections.push({ id: slug(name), name });
+    const last = state.sections[state.sections.length - 1];
+    state.sections.push({ id: slug(name), name, order: midKey(last ? last.order : '', '') });
     input.value = '';
     save();
     renderSections();

@@ -1,0 +1,11 @@
+{
+  "name": "todo-board-tests",
+  "private": true,
+  "description": "jsdom tests for the board. The app itself has no dependencies and no build step; these live here so that stays true.",
+  "scripts": {
+    "test": "for f in *.test.js; do echo \"── $f\"; node \"$f\" || exit 1; done"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1"
+  }
+}
